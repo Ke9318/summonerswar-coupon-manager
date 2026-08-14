@@ -1,44 +1,73 @@
 # Summoners War Coupon Manager
 
-Summoners War 쿠폰을 여러 공개 소스에서 찾아 계정별로 자동 등록하는 Tampermonkey userscript입니다.
-
-## 현재 버전
-
-v4.8.0
+Windows용 Summoners War 쿠폰 스캔·자동 등록 GUI 프로그램입니다.
 
 ## 주요 기능
 
-- SWGT와 SW-Teams의 활성 쿠폰을 독립적으로 스캔하고 결과를 병합·중복 제거
-- 한 소스가 실패해도 다른 소스 결과로 계속 진행
-- GUI 계정 추가·수정·삭제 및 계정 선택
-- `새 쿠폰만` 또는 `모든 활성 쿠폰` 실행
-- 계정별 성공/이미 사용/만료/무효 기록 보존
-- 백그라운드 작업 탭에서 자동 등록 후 완료 시 자동 종료
-- GitHub raw URL을 통한 Tampermonkey 자동 업데이트
+- SWGT, SW-Teams, SWQ 쿠폰 소스를 독립적으로 스캔
+- 여러 소스에서 수집한 쿠폰 코드 병합 및 중복 제거
+- 후보 쿠폰도 공식 Hive 쿠폰 페이지에서 한 번 시도
+- GUI에서 계정 추가, 수정, 삭제 및 사용 계정 선택
+- `새 쿠폰 등록`: 계정별 완료 기록을 확인해 미처리 쿠폰만 실행
+- `전체 검사`: 현재 발견된 모든 쿠폰을 다시 검사
+- 성공, 이미 사용, 만료, 무효, 오류 결과를 계정별로 기록
+- 숨겨진 WebView2에서 한국 서버 선택과 쿠폰 등록 자동화
+- GitHub Releases 기반 자동 업데이트 및 자동 재시작
 
-## 설치
+## 개인정보와 사용자 데이터
 
-- [공유용 설치](https://raw.githubusercontent.com/Ke9318/summonerswar-coupon-manager/main/SW_Coupon_Manager.user.js)
-- [개인용 설치](https://raw.githubusercontent.com/Ke9318/summonerswar-coupon-manager/main/SW_Coupon_Manager_Personal.user.js)
+배포 파일과 저장소에는 기본 계정, Hive ID, 닉네임이 포함되지 않습니다. 사용자가 프로그램을 처음 실행한 뒤 직접 계정을 등록합니다.
 
-Raw 링크를 열어 Tampermonkey에 설치하세요.
+사용자 데이터는 프로그램 설치 폴더가 아닌 다음 위치에 저장됩니다.
 
-## 공유용과 개인용의 차이
+`%LOCALAPPDATA%\SWCouponManager\`
 
-- 공유용 `SW_Coupon_Manager.user.js`: 기본 계정이 비어 있습니다.
-- 개인용 `SW_Coupon_Manager_Personal.user.js`: 저장소에 설정된 개인 기본 계정 2개가 포함됩니다.
-- 두 스크립트는 서로 다른 `@updateURL`과 `@downloadURL`을 사용하므로 개인용이 공유용으로 바뀌지 않습니다.
+- `state.json`: 계정, 선택 상태, 쿠폰 처리 기록, 마지막 스캔 결과, 창 위치와 크기
+- `state.backup.json`: 이전 정상 상태의 자동 백업
+
+프로그램 업데이트는 이 폴더를 건드리지 않으므로 계정과 쿠폰 기록이 유지됩니다. 기본 상태 파일이 손상되면 백업 파일을 사용해 복구합니다.
 
 ## 자동 업데이트
 
-파일명은 버전과 무관하게 위 이름으로 고정합니다. 이후 v4.9, v5.0에서도 같은 raw URL에 더 높은 `@version`을 게시하면 Tampermonkey가 업데이트를 감지합니다.
+프로그램 시작 시 `Ke9318/summonerswar-coupon-manager`의 최신 GitHub Release를 확인합니다. 더 높은 버전이 있으면 화면에 업데이트 버튼이 표시됩니다.
 
-저장 키 `sw_coupon_manager_v46`은 기존 계정 정보, 처리 기록, 쿠폰 사용 이력을 유지하기 위해 변경하지 않습니다.
+업데이트를 실행하면 다음 순서로 처리됩니다.
 
-## v4.8.0
+1. `SWCouponManager-win-x64.zip`을 임시 폴더에 백그라운드 다운로드
+2. ZIP을 별도 준비 폴더에 풀고 `SWCouponManager.exe` 포함 여부 확인
+3. 현재 프로그램 자동 종료
+4. 최대 5회 재시도하며 프로그램 파일 교체
+5. 새 버전 자동 실행
 
-- SWGT + SW-Teams 다중 소스 쿠폰 감지
-- 부분 실패를 허용하는 독립 스캔
-- 일반 영문+숫자 쿠폰 추출 및 UI 단어 blacklist 적용
-- 개인용 자동 업데이트 URL 분리
-- v4.7의 계정 관리, 미처리 쿠폰 큐, 공식 교환소 DOM 자동화, 백그라운드 실행 로직 유지
+사용자 데이터는 `%LOCALAPPDATA%`에 분리되어 있어 업데이트 대상에 포함되지 않습니다.
+
+## 요구 사항
+
+- Windows 10/11 x64
+- Microsoft Edge WebView2 Runtime
+
+대부분의 Windows 10/11에는 Evergreen WebView2 Runtime이 설치되어 있습니다. 없는 경우 Microsoft에서 WebView2 Runtime을 설치해야 합니다.
+
+## 로컬 빌드
+
+.NET 8 SDK가 설치된 Windows에서 실행합니다.
+
+```powershell
+dotnet restore
+dotnet build -c Release
+dotnet publish -c Release -r win-x64 --self-contained true -o publish
+```
+
+저장 및 백업 복구 자체 검사는 다음과 같이 실행할 수 있습니다.
+
+```powershell
+.\publish\SWCouponManager.exe --self-test
+```
+
+## GitHub Release
+
+프로젝트의 `<Version>`과 일치하는 `v1.0.0`, `v1.0.1`, `v1.1.0` 형식의 태그를 push하면 `.github/workflows/release.yml`이 Windows x64 self-contained 배포본을 빌드합니다.
+
+워크플로는 자체 검사 후 다음 이름의 Release asset을 생성합니다.
+
+`SWCouponManager-win-x64.zip`
