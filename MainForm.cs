@@ -394,7 +394,21 @@ public sealed class MainForm : Form
                 var item = queue[i];
                 SetStatus($"쿠폰 받는 중 · {i + 1} / {queue.Count} · {item.Account.Name} · {item.Code} 확인 중...");
 
-                var (status, message) = await RedeemAsync(item, _workCts.Token);
+                string status;
+                string message;
+                try
+                {
+                    (status, message) = await RedeemAsync(item, _workCts.Token);
+                }
+                catch (OperationCanceledException) when (_workCts.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    status = "error";
+                    message = "이 쿠폰 처리 중 오류가 발생했습니다: " + ex.Message;
+                }
                 Record(item, status, message);
 
                 _results.Items.Insert(0, $"{item.Account.Name} · {item.Code} · {DisplayStatus(status)}");
@@ -427,11 +441,22 @@ public sealed class MainForm : Form
         _web.NavigationCompleted += Nav;
         try
         {
-            _web.Source = new Uri(CouponUrl);
+            // 같은 URL을 연속 지정하면 WebView2가 NavigationCompleted를 발생시키지 않을 수 있다.
+            // 매 작업마다 고유 쿼리를 붙여 새로운 페이지 탐색을 보장한다.
+            var navigationUrl = CouponUrl + "?_scm=" + Guid.NewGuid().ToString("N");
+            _web.CoreWebView2.Navigate(navigationUrl);
             using var navigationCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             navigationCts.CancelAfter(TimeSpan.FromSeconds(20));
             using var reg = navigationCts.Token.Register(() => tcs.TrySetCanceled(navigationCts.Token));
-            var ok = await tcs.Task;
+            bool ok;
+            try
+            {
+                ok = await tcs.Task;
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                return ("error", "공식 쿠폰 페이지를 제한 시간 안에 열지 못했습니다.");
+            }
             if (!ok) throw new InvalidOperationException("공식 쿠폰 페이지를 열지 못했습니다.");
         }
         finally
@@ -566,7 +591,10 @@ public sealed class MainForm : Form
 
             var status = Classify(message);
             if (status != "unknown")
+            {
+                await _web.ExecuteScriptAsync("document.querySelector('#EVTpop_1 .btn_confirm')?.click();");
                 return (status, message);
+            }
         }
 
         return ("error", confirmationClicked
