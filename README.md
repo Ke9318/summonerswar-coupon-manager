@@ -4,12 +4,15 @@ Windows용 Summoners War 쿠폰 스캔·자동 등록 GUI 프로그램입니다.
 
 ## 주요 기능
 
-- SWGT, SW-Teams, SWQ 쿠폰 소스를 병렬 스캔하고 코드를 중복 제거
+- SWGT, SW-Teams, SWQ의 실제 쿠폰 요소만 출처별 전용 파서로 읽고 코드를 중복 제거
 - 후보 쿠폰을 공식 Hive 쿠폰 페이지에서 계정별로 한 번씩 시도
 - GUI에서 계정 추가, 수정, 삭제 및 사용 계정 선택
 - 성공, 이미 사용, 만료, 무효 결과를 계정별로 기록하고 완료된 쿠폰은 재시도하지 않음
 - 숨겨진 WebView2에서 한국 서버 선택과 쿠폰 등록 자동화
 - GitHub Releases 기반 자동 업데이트 및 자동 재시작
+- `새 쿠폰 찾기 → 새 쿠폰 받기` 중심의 간단한 사용자 화면
+
+쿠폰 출처는 기본 목록에서 숨기고 마우스를 올렸을 때만 표시합니다. 사이트 전체 텍스트에 범용 영숫자 정규식을 적용하지 않으므로 HTML 해시, 메뉴 문자열, 만료된 SWQ 항목이 쿠폰으로 수집되지 않습니다.
 
 ## 사용자 데이터
 
@@ -58,6 +61,6 @@ dotnet publish -c Release -r win-x64 --self-contained false --no-restore -o publ
 
 ## GitHub Release
 
-프로젝트의 `<Version>`과 일치하는 `v1.0.1`, `v1.1.0` 형식의 태그를 push하면 `.github/workflows/release.yml`이 Windows x64 framework-dependent 배포본을 만들고 다음 이름으로 업로드합니다.
+프로젝트의 `<Version>`과 일치하는 `v1.1.0`, `v1.2.0` 형식의 태그를 push하면 `.github/workflows/release.yml`이 Windows x64 framework-dependent 배포본을 만들고 다음 이름으로 업로드합니다.
 
 `SWCouponManager-win-x64.zip`
