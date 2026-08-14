@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Summoners War 쿠폰 매니저
+// @name         Summoners War 쿠폰 매니저 - 개인용
 // @namespace    local.sw.coupon
 // @version      4.8.0
 // @description  SWGT + SW-Teams 다중 소스 스캔 + GUI 계정관리 + 미사용 쿠폰 자동등록 + 백그라운드 실행
@@ -7,8 +7,8 @@
 // @match        https://*/*
 // @run-at       document-start
 // @homepageURL  https://github.com/Ke9318/summonerswar-coupon-manager
-// @updateURL    https://raw.githubusercontent.com/Ke9318/summonerswar-coupon-manager/main/SW_Coupon_Manager.user.js
-// @downloadURL  https://raw.githubusercontent.com/Ke9318/summonerswar-coupon-manager/main/SW_Coupon_Manager.user.js
+// @updateURL    https://raw.githubusercontent.com/Ke9318/summonerswar-coupon-manager/main/SW_Coupon_Manager_Personal.user.js
+// @downloadURL  https://raw.githubusercontent.com/Ke9318/summonerswar-coupon-manager/main/SW_Coupon_Manager_Personal.user.js
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_xmlhttpRequest
@@ -31,7 +31,10 @@ const isCouponPage = () => location.href.startsWith(COUPON_URL);
 const isWorker = new URLSearchParams(location.search).get('sw_coupon_worker') === '1';
 const KEY = 'sw_coupon_manager_v46';
 
-const DEFAULT_ACCOUNTS = [];
+const DEFAULT_ACCOUNTS = [
+  {id:'acc1', name:'저달처럼', hiveId:'jongeun2004', server:'korea'},
+  {id:'acc2', name:'라시에', hiveId:'user0952c3b5', server:'korea'}
+];
 
 const fresh = () => ({
   accounts: DEFAULT_ACCOUNTS,
