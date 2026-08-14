@@ -1,0 +1,71 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore
+        run: dotnet restore -r win-x64 -p:SelfContained=true
+
+      - name: Verify tag matches project version
+        shell: pwsh
+        run: |
+          [xml]$project = Get-Content -LiteralPath SWCouponManager.csproj
+          $projectVersion = $project.Project.PropertyGroup.Version
+          $tagVersion = "${{ github.ref_name }}".TrimStart('v')
+          if ($projectVersion -ne $tagVersion) {
+            throw "Tag version $tagVersion does not match project version $projectVersion"
+          }
+
+      - name: Publish
+        run: dotnet publish -c Release -r win-x64 --self-contained true --no-restore -o publish
+
+      - name: Run self-test
+        shell: pwsh
+        run: |
+          $test = Start-Process -FilePath .\publish\SWCouponManager.exe -ArgumentList "--self-test" -Wait -PassThru
+          if ($test.ExitCode -ne 0) { throw "Self-test failed with exit code $($test.ExitCode)" }
+
+      - name: Verify release contents
+        shell: pwsh
+        run: |
+          if (-not (Test-Path -LiteralPath publish\SWCouponManager.exe)) {
+            throw "SWCouponManager.exe was not published"
+          }
+
+      - name: Create ZIP
+        shell: pwsh
+        run: |
+          Compress-Archive -Path publish\* -DestinationPath SWCouponManager-win-x64.zip -Force
+          if (-not (Test-Path -LiteralPath SWCouponManager-win-x64.zip)) {
+            throw "Release ZIP was not created"
+          }
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if (gh release view $tag 2>$null) {
+            gh release upload $tag "SWCouponManager-win-x64.zip" --clobber
+          } else {
+            gh release create $tag "SWCouponManager-win-x64.zip" --generate-notes --title $tag
+          }
