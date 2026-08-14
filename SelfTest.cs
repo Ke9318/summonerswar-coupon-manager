@@ -66,6 +66,7 @@ internal static class SelfTest
             Require(recovered.History[account.Id]["TESTCODE1"].Status == "success", "백업 기록 복구 실패");
 
             TestCouponParsers();
+            TestHiveResultClassification();
 
             return 0;
         }
@@ -110,6 +111,16 @@ internal static class SelfTest
         Require(actual.SetEquals(["AUGSW2026V7N", "SWCTICKET2HAMBURG", "INVOCATEUREU26"]),
                 "출처별 쿠폰 파서 결과 오류");
         Require(falsePositives.All(x => !actual.Contains(x)), "가짜 쿠폰 오탐 회귀");
+    }
+
+    private static void TestHiveResultClassification()
+    {
+        Require(MainForm.Classify("쿠폰 선물 지급이 완료되었습니다.") == "success", "성공 결과 분류 실패");
+        Require(MainForm.Classify("이미 사용된 쿠폰 코드입니다.") == "already", "이미 사용 결과 분류 실패");
+        Require(MainForm.Classify("만료된 쿠폰입니다.") == "expired", "만료 결과 분류 실패");
+        Require(MainForm.Classify("유효한 쿠폰 코드가 아닙니다. 다시 확인해 주세요.") == "invalid",
+                "Hive 무효 결과 분류 실패");
+        Require(MainForm.Classify("일시적인 오류가 발생 되었습니다.") == "error", "오류 결과 분류 실패");
     }
 
     private static void Require(bool condition, string message)
