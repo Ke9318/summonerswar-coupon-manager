@@ -18,18 +18,24 @@ public sealed class MainForm : Form
     private readonly ListBox _codes = new();
     private readonly ListBox _results = new();
     private readonly Label _status = new();
-    private readonly Button _scan = new() { Text = "스캔" };
-    private readonly Button _runNew = new() { Text = "새 쿠폰 등록" };
-    private readonly Button _runAll = new() { Text = "전체 검사" };
-    private readonly Button _stop = new() { Text = "작업 중지", Enabled = false };
-    private readonly Button _addAccount = new() { Text = "계정 추가" };
+    private readonly Button _scan = new() { Text = "새 쿠폰 찾기" };
+    private readonly Button _runNew = new() { Text = "새 쿠폰 받기" };
+    private readonly Button _runAll = new() { Text = "모든 쿠폰 다시 확인" };
+    private readonly Button _stop = new() { Text = "중지", Enabled = false };
+    private readonly Button _addAccount = new() { Text = "+ 계정 추가" };
     private readonly Button _deleteAccount = new() { Text = "선택 삭제" };
     private readonly Button _update = new() { Text = "업데이트 적용", Visible = false };
-    private readonly Label _version = new() { AutoSize = true, Padding = new Padding(8, 7, 0, 0) };
+    private readonly Button _history = new() { Text = "기록 보기" };
+    private readonly Button _settings = new() { Text = "설정" };
+    private readonly GroupBox _couponGroup = new() { Text = "사용 가능한 쿠폰", Dock = DockStyle.Fill };
+    private readonly Label _version = new() { AutoSize = true, ForeColor = Color.DimGray };
+    private readonly FlowLayoutPanel _advanced = new() { Visible = false, AutoSize = true };
+    private readonly ToolTip _codeTip = new();
     private readonly WebView2 _web = new();
 
     private UpdateInfo? _availableUpdate;
     private CancellationTokenSource? _workCts;
+    private bool _loadingAccounts;
 
     public MainForm()
     {
@@ -47,7 +53,7 @@ public sealed class MainForm : Form
         Size = new Size(Math.Max(680, _state.WindowW), Math.Max(560, _state.WindowH));
 
         BuildUi();
-        _version.Text = $"현재 버전 v{_updates.CurrentVersion.ToString(3)}";
+        _version.Text = $"v{_updates.CurrentVersion.ToString(3)}";
         LoadAccountsToGrid();
         LoadCodesToUi();
 
@@ -82,23 +88,27 @@ public sealed class MainForm : Form
         var root = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            ColumnCount = 2,
-            RowCount = 5,
-            Padding = new Padding(10)
+            ColumnCount = 1,
+            RowCount = 7,
+            Padding = new Padding(16)
         };
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 52));
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 48));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 43));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 57));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 34));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 25));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 33));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
 
-        var top = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight };
-        foreach (var b in new[] { _scan, _runNew, _runAll, _stop, _update }) top.Controls.Add(b);
-        top.Controls.Add(_version);
-        root.Controls.Add(top, 0, 0);
-        root.SetColumnSpan(top, 2);
+        var title = new Label
+        {
+            Text = "Summoners War 쿠폰 매니저",
+            Font = new Font(Font.FontFamily, 15, FontStyle.Bold),
+            AutoSize = true,
+            Anchor = AnchorStyles.Left
+        };
+        root.Controls.Add(title, 0, 0);
 
         _accounts.Dock = DockStyle.Fill;
         _accounts.AllowUserToAddRows = false;
@@ -108,27 +118,70 @@ public sealed class MainForm : Form
         _accounts.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Use", HeaderText = "사용", FillWeight = 18 });
         _accounts.Columns.Add(new DataGridViewTextBoxColumn { Name = "Name", HeaderText = "닉네임", FillWeight = 38 });
         _accounts.Columns.Add(new DataGridViewTextBoxColumn { Name = "HiveId", HeaderText = "Hive ID", FillWeight = 44 });
-        root.Controls.Add(_accounts, 0, 1);
+        _accounts.CellEndEdit += (_, _) => SaveGridToState();
+        _accounts.CurrentCellDirtyStateChanged += (_, _) =>
+        {
+            if (_accounts.IsCurrentCellDirty)
+                _accounts.CommitEdit(DataGridViewDataErrorContexts.Commit);
+        };
+        _accounts.CellValueChanged += (_, _) =>
+        {
+            if (_accounts.IsHandleCreated && !_loadingAccounts) SaveGridToState();
+        };
+
+        var accountGroup = new GroupBox { Text = "계정 · 체크한 계정에 쿠폰을 받습니다", Dock = DockStyle.Fill };
+        accountGroup.Controls.Add(_accounts);
+        root.Controls.Add(accountGroup, 0, 1);
+
+        _scan.AutoSize = true;
+        _runNew.AutoSize = true;
+        _scan.Font = new Font(Font, FontStyle.Bold);
+        _runNew.Font = new Font(Font, FontStyle.Bold);
+        _scan.Padding = new Padding(10, 5, 10, 5);
+        _runNew.Padding = new Padding(10, 5, 10, 5);
+        var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight };
+        actions.Controls.Add(_scan);
+        actions.Controls.Add(_runNew);
+        actions.Controls.Add(_stop);
+        actions.Controls.Add(_update);
+        root.Controls.Add(actions, 0, 2);
 
         _codes.Dock = DockStyle.Fill;
-        root.Controls.Add(_codes, 1, 1);
-
-        var accountButtons = new FlowLayoutPanel { Dock = DockStyle.Fill };
-        accountButtons.Controls.Add(_addAccount);
-        accountButtons.Controls.Add(_deleteAccount);
-        root.Controls.Add(accountButtons, 0, 2);
-
-        var codeTitle = new Label { Text = "현재 활성/후보 쿠폰", AutoSize = true, Anchor = AnchorStyles.Left };
-        root.Controls.Add(codeTitle, 1, 2);
+        _codes.HorizontalScrollbar = true;
+        _codes.MouseMove += (_, e) =>
+        {
+            var index = _codes.IndexFromPoint(e.Location);
+            if (index < 0 || index >= _state.LastScanCodes.Count) return;
+            var code = _state.LastScanCodes[index];
+            var sources = _state.CodeSources.TryGetValue(code, out var list) ? string.Join(", ", list) : "알 수 없음";
+            _codeTip.SetToolTip(_codes, $"출처: {sources}");
+        };
+        _couponGroup.Controls.Add(_codes);
+        root.Controls.Add(_couponGroup, 0, 3);
 
         _results.Dock = DockStyle.Fill;
-        root.Controls.Add(_results, 0, 3);
-        root.SetColumnSpan(_results, 2);
+        var resultGroup = new GroupBox { Text = "진행 결과", Dock = DockStyle.Fill };
+        resultGroup.Controls.Add(_results);
+        root.Controls.Add(resultGroup, 0, 4);
 
+        _advanced.Controls.Add(_addAccount);
+        _advanced.Controls.Add(_deleteAccount);
+        _advanced.Controls.Add(_runAll);
+        var secondary = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
+        secondary.Controls.Add(_history);
+        secondary.Controls.Add(_settings);
+        secondary.Controls.Add(_advanced);
+        root.Controls.Add(secondary, 0, 5);
+
+        var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2 };
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        footer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _status.Dock = DockStyle.Fill;
         _status.TextAlign = ContentAlignment.MiddleLeft;
-        root.Controls.Add(_status, 0, 4);
-        root.SetColumnSpan(_status, 2);
+        _version.Anchor = AnchorStyles.Right;
+        footer.Controls.Add(_status, 0, 0);
+        footer.Controls.Add(_version, 1, 0);
+        root.Controls.Add(footer, 0, 6);
 
         Controls.Add(root);
 
@@ -145,11 +198,25 @@ public sealed class MainForm : Form
         _stop.Click += (_, _) => _workCts?.Cancel();
         _addAccount.Click += (_, _) => AddAccountRow();
         _deleteAccount.Click += (_, _) => DeleteSelectedRows();
+        _settings.Click += (_, _) => _advanced.Visible = !_advanced.Visible;
+        _history.Click += (_, _) => ShowHistory();
         _update.Click += async (_, _) =>
         {
             if (_availableUpdate is not null)
                 await _updates.DownloadAndRestartAsync(_availableUpdate, SetStatus);
         };
+    }
+
+    private void ShowHistory()
+    {
+        var lines = _state.Accounts.SelectMany(account =>
+            _state.History.TryGetValue(account.Id, out var records)
+                ? records.OrderByDescending(x => x.Value.Time)
+                    .Select(x => $"{account.Name} · {x.Key} · {DisplayStatus(x.Value.Status)} · {x.Value.Time.LocalDateTime:g}\r\n{x.Value.Message}")
+                : []);
+        var text = string.Join("\r\n\r\n", lines);
+        MessageBox.Show(text.Length == 0 ? "아직 쿠폰 처리 기록이 없습니다." : text,
+                        "쿠폰 처리 기록", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     private async Task EnsureWebViewAsync()
@@ -164,12 +231,14 @@ public sealed class MainForm : Form
 
     private void LoadAccountsToGrid()
     {
+        _loadingAccounts = true;
         _accounts.Rows.Clear();
         foreach (var a in _state.Accounts)
         {
             var idx = _accounts.Rows.Add(a.Selected, a.Name, a.HiveId);
             _accounts.Rows[idx].Tag = a.Id;
         }
+        _loadingAccounts = false;
     }
 
     private void SaveGridToState()
@@ -221,7 +290,8 @@ public sealed class MainForm : Form
         try
         {
             ToggleWorking(true);
-            SetStatus("SWGT + 보조 소스 스캔 중...");
+            SetStatus("새 쿠폰을 찾는 중...");
+            var previous = _state.LastScanCodes.ToHashSet(StringComparer.OrdinalIgnoreCase);
             var result = await _sources.ScanAsync();
 
             _state.LastScanCodes = result.Codes;
@@ -230,9 +300,14 @@ public sealed class MainForm : Form
             _storage.Save(_state);
             LoadCodesToUi();
 
+            var newCount = result.Codes.Count(code => !previous.Contains(code));
+            _couponGroup.Text = newCount > 0
+                ? $"새로 찾은 쿠폰 {newCount}개 · 사용 가능한 쿠폰 {result.Codes.Count}개"
+                : $"사용 가능한 쿠폰 {result.Codes.Count}개";
+
             SetStatus(result.Errors.Count == 0
-                ? $"스캔 완료 · {result.Codes.Count}개 · {string.Join(" + ", result.SuccessfulSources)}"
-                : $"스캔 완료 · {result.Codes.Count}개 · {string.Join(" + ", result.SuccessfulSources)} · 일부 실패: {string.Join(" / ", result.Errors)}");
+                ? $"완료 · 새 쿠폰 {newCount}개 발견"
+                : $"완료 · 새 쿠폰 {newCount}개 발견 · 일부 출처를 확인하지 못했습니다.");
             return true;
         }
         catch (Exception ex)
@@ -250,10 +325,8 @@ public sealed class MainForm : Form
     {
         _codes.Items.Clear();
         foreach (var code in _state.LastScanCodes)
-        {
-            var sources = _state.CodeSources.TryGetValue(code, out var s) ? string.Join("+", s) : "?";
-            _codes.Items.Add($"{code}  [{sources}]");
-        }
+            _codes.Items.Add(code);
+        _couponGroup.Text = $"사용 가능한 쿠폰 {_state.LastScanCodes.Count}개";
     }
 
     private bool IsDone(string accountId, string code)
@@ -263,7 +336,7 @@ public sealed class MainForm : Form
         return rec.Status is "success" or "already" or "expired" or "invalid";
     }
 
-    private async Task RunAsync(bool runAll)
+    private async Task RunAsync(bool _)
     {
         if (_workCts is not null)
         {
@@ -285,7 +358,7 @@ public sealed class MainForm : Form
         var queue = new List<WorkItem>();
         foreach (var a in selected)
         foreach (var c in _state.LastScanCodes)
-            if (runAll || !IsDone(a.Id, c))
+            if (!IsDone(a.Id, c))
                 queue.Add(new WorkItem(a, c));
 
         if (queue.Count == 0)
@@ -306,7 +379,7 @@ public sealed class MainForm : Form
             {
                 _workCts.Token.ThrowIfCancellationRequested();
                 var item = queue[i];
-                SetStatus($"{i + 1}/{queue.Count} · {item.Account.Name} · {item.Code}");
+                SetStatus($"쿠폰 받는 중 · {i + 1} / {queue.Count} · {item.Account.Name} · {item.Code} 확인 중...");
 
                 var (status, message) = await RedeemAsync(item, _workCts.Token);
                 Record(item, status, message);
@@ -315,7 +388,7 @@ public sealed class MainForm : Form
                 _storage.Save(_state);
             }
 
-            SetStatus("전체 작업 완료");
+            SetStatus($"완료 · 새 쿠폰 {queue.Count}개 처리");
         }
         catch (OperationCanceledException)
         {
@@ -486,7 +559,7 @@ public sealed class MainForm : Form
         "success" => "성공",
         "already" => "이미 사용",
         "expired" => "만료",
-        "invalid" => "무효",
+        "invalid" => "사용할 수 없음",
         "error" => "오류",
         _ => status
     };
