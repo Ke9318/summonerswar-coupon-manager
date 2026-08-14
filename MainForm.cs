@@ -24,7 +24,14 @@ public sealed class MainForm : Form
     private readonly Button _stop = new() { Text = "중지", Enabled = false };
     private readonly Button _addAccount = new() { Text = "+ 계정 추가" };
     private readonly Button _deleteAccount = new() { Text = "선택 삭제" };
-    private readonly Button _update = new() { Text = "업데이트 적용", Visible = false };
+    private readonly Button _update = new()
+    {
+        Text = "업데이트 적용",
+        Visible = false,
+        AutoSize = true,
+        AutoSizeMode = AutoSizeMode.GrowAndShrink,
+        Padding = new Padding(8, 3, 8, 3)
+    };
     private readonly Button _history = new() { Text = "기록 보기" };
     private readonly Button _settings = new() { Text = "설정" };
     private readonly GroupBox _couponGroup = new() { Text = "사용 가능한 쿠폰", Dock = DockStyle.Fill };
@@ -139,7 +146,13 @@ public sealed class MainForm : Form
         _runNew.Font = new Font(Font, FontStyle.Bold);
         _scan.Padding = new Padding(10, 5, 10, 5);
         _runNew.Padding = new Padding(10, 5, 10, 5);
-        var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight };
+        var actions = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            AutoScroll = true
+        };
         actions.Controls.Add(_scan);
         actions.Controls.Add(_runNew);
         actions.Controls.Add(_stop);
