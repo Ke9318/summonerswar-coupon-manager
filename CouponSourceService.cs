@@ -22,10 +22,9 @@ public sealed class CouponSourceService
 
     private static readonly HashSet<string> UiWords = new(StringComparer.OrdinalIgnoreCase)
     {
-        "SUMMONERS", "ACTIVE", "AVAILABLE", "CODES", "COMMUNITY", "PROVIDED",
-        "ACCOUNT", "MONSTERS", "DASHBOARD", "PASSWORD", "USERNAME", "DISCORD",
-        "REWARDS", "PRIVACY", "CONTACT", "COOKIE", "JAVASCRIPT", "CONTENT",
-        "WINDOWS", "MONSTERSGAME", "MONSTERS36"
+        "ACTIVE", "AVAILABLE", "CODES", "COMMUNITY", "ACCOUNT", "DASHBOARD",
+        "PASSWORD", "USERNAME", "REWARDS", "PRIVACY", "CONTACT", "COOKIE",
+        "JAVASCRIPT", "CONTENT", "WINDOWS"
     };
 
     private static readonly Regex SwgtLink = new(
@@ -41,12 +40,22 @@ public sealed class CouponSourceService
         @"<td\b[^>]*>(?<cell>[\s\S]*?)</td>",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex StripHtml = new(@"<[^>]+>", RegexOptions.Compiled);
-    private static readonly Regex AllowedCode = new(@"^[A-Z0-9]{6,32}$", RegexOptions.Compiled);
-    private static readonly Regex HexOnly = new(@"^(?:[0-9A-F]{8}|[0-9A-F]{12}|[0-9A-F]{16}|[0-9A-F]{32})$", RegexOptions.Compiled);
+    private static readonly Regex HiddenContent = new(
+        @"<!--[\s\S]*?-->|<(script|style)\b[^>]*>[\s\S]*?</\1>",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex Url = new(@"https?://\S+|www\.\S+", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex GuidText = new(
+        @"\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex BroadCandidate = new(
+        @"(?<![A-Z0-9])[A-Z0-9]{5,40}(?![A-Z0-9])",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex AllowedCode = new(@"^[A-Z0-9]{5,40}$", RegexOptions.Compiled);
+    private static readonly Regex LongHexHash = new(@"^[0-9A-F]{20,}$", RegexOptions.Compiled);
 
     public CouponSourceService()
     {
-        _http.DefaultRequestHeaders.UserAgent.ParseAdd("SWCouponManager/1.1");
+        _http.DefaultRequestHeaders.UserAgent.ParseAdd("SWCouponManager/1.2");
         _http.DefaultRequestHeaders.CacheControl = new() { NoCache = true };
     }
 
@@ -108,25 +117,26 @@ public sealed class CouponSourceService
         {
             "SWGT" => SwgtLink.Matches(html).Select(m => m.Groups["code"].Value),
             "SW-Teams" => CodeTag.Matches(html).Select(m => m.Groups["code"].Value),
-            "SWQ" => ExtractSwqActiveRows(html),
+            "SWQ" => ExtractSwqRows(html),
             _ => []
         };
 
         var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var candidate in candidates)
             AddIfPlausible(candidate, result);
+
+        // Keep source-specific parsing, then broaden from visible page text.
+        // Hive is the final authority for whether a candidate is a real coupon.
+        foreach (Match match in BroadCandidate.Matches(GetVisibleText(html)))
+            AddIfPlausible(match.Value, result);
         return result.OrderBy(x => x).ToList();
     }
 
-    private static IEnumerable<string> ExtractSwqActiveRows(string html)
+    private static IEnumerable<string> ExtractSwqRows(string html)
     {
         foreach (Match match in TableRow.Matches(html))
         {
             var row = match.Groups["row"].Value;
-            var text = DecodeText(row);
-            if (Regex.IsMatch(text, @"\b(expired|만료|invalid|무효)\b", RegexOptions.IgnoreCase))
-                continue;
-
             var cells = TableCell.Matches(row);
             if (cells.Count > 0)
                 yield return cells[0].Groups["cell"].Value;
@@ -139,9 +149,17 @@ public sealed class CouponSourceService
         if (!AllowedCode.IsMatch(code)) return;
         if (!code.Any(char.IsLetter)) return;
         if (UiWords.Contains(code)) return;
-        if (HexOnly.IsMatch(code)) return;
+        if (LongHexHash.IsMatch(code)) return;
         if (Guid.TryParse(code, out _)) return;
         output.Add(code);
+    }
+
+    private static string GetVisibleText(string html)
+    {
+        var visible = HiddenContent.Replace(html, " ");
+        visible = GuidText.Replace(visible, " ");
+        visible = Url.Replace(visible, " ");
+        return DecodeText(visible);
     }
 
     private static string DecodeText(string value) =>

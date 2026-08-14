@@ -1,18 +1,18 @@
 # Summoners War Coupon Manager
 
-Windows용 Summoners War 쿠폰 스캔·자동 등록 GUI 프로그램입니다.
+Windows용 Summoners War 쿠폰 검색·자동 등록 GUI 프로그램입니다.
 
 ## 주요 기능
 
-- SWGT, SW-Teams, SWQ의 실제 쿠폰 요소만 출처별 전용 파서로 읽고 코드를 중복 제거
-- 후보 쿠폰을 공식 Hive 쿠폰 페이지에서 계정별로 한 번씩 시도
-- GUI에서 계정 추가, 수정, 삭제 및 사용 계정 선택
-- 성공, 이미 사용, 만료, 무효 결과를 계정별로 기록하고 완료된 쿠폰은 재시도하지 않음
-- 숨겨진 WebView2에서 한국 서버 선택과 쿠폰 등록 자동화
+- SWGT, SW-Teams, SWQ의 출처별 확정 파서와 화면 본문 fallback 후보 수집
+- 여러 출처의 후보를 대소문자 구분 없이 중복 제거하고 출처 함께 표시
+- 후보는 선택한 모든 계정에서 공식 Hive 쿠폰 페이지로 한 번씩 검증
+- 성공, 이미 사용, 만료, 무효는 계정별 완료 기록으로 보존하여 재시도하지 않음
+- 네트워크·페이지 인식 등 오류 상태만 다음 실행에서 재시도
+- GUI 계정 추가·수정·삭제·선택, 새 쿠폰 찾기·받기, 진행 상황 및 처리 기록
 - GitHub Releases 기반 자동 업데이트 및 자동 재시작
-- `새 쿠폰 찾기 → 새 쿠폰 받기` 중심의 간단한 사용자 화면
 
-쿠폰 출처는 기본 목록에서 숨기고 마우스를 올렸을 때만 표시합니다. 사이트 전체 텍스트에 범용 영숫자 정규식을 적용하지 않으므로 HTML 해시, 메뉴 문자열, 만료된 SWQ 항목이 쿠폰으로 수집되지 않습니다.
+탐지는 쿠폰 누락 방지를 우선합니다. 출처별 확정 요소를 먼저 읽고, 스크립트·스타일·주석·URL·UUID·긴 해시를 제외한 화면 본문의 영문/숫자 후보를 추가합니다. 후보가 다소 넓게 수집될 수 있으며, 실제 유효 여부는 Hive의 응답으로 최종 판정합니다.
 
 ## 사용자 데이터
 
@@ -22,30 +22,24 @@ Windows용 Summoners War 쿠폰 스캔·자동 등록 GUI 프로그램입니다.
 
 `%LOCALAPPDATA%\SWCouponManager\`
 
-- `state.json`: 계정, 선택 상태, 쿠폰 처리 기록, 마지막 스캔 결과, 창 상태
+- `state.json`: 계정, 선택 상태, 계정별 쿠폰 처리 기록, 마지막 스캔 결과, 창 상태
 - `state.backup.json`: 이전 정상 상태의 자동 백업
 
-자동업데이트는 이 폴더를 변경하지 않으므로 프로그램 버전이 바뀌어도 계정과 쿠폰 기록이 유지됩니다.
+자동업데이트는 이 폴더를 변경하지 않으므로 버전이 바뀌어도 계정과 쿠폰 기록이 유지됩니다.
 
-## 필수 런타임
+## 필수 환경
 
 - Windows 10/11 x64
 - [.NET 8 Desktop Runtime (x64)](https://dotnet.microsoft.com/download/dotnet/8.0)
 - [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/#download-section)
 
-배포본은 framework-dependent 방식입니다. .NET 또는 WebView2 Runtime은 Release ZIP에 포함하지 않습니다.
-
-.NET 8 Desktop Runtime이 없으면 Windows용 .NET apphost가 프로그램 시작 전에 Microsoft 설치 안내를 표시합니다. WebView2 Runtime이 없으면 프로그램이 시작 시 이를 확인하고 설치 페이지를 열 수 있도록 안내합니다. 이미 설치되어 있으면 별도 안내 없이 바로 실행합니다.
+배포본은 framework-dependent 방식이며 .NET 또는 WebView2 Runtime을 Release ZIP에 포함하지 않습니다. 필요한 런타임이 없으면 프로그램 시작 시 설치 안내를 표시합니다.
 
 ## 자동 업데이트
 
-실행 시 `Ke9318/summonerswar-coupon-manager`의 최신 GitHub Release를 확인합니다. 사용자가 업데이트를 선택하면 가벼운 `SWCouponManager-win-x64.zip`만 임시 폴더에 다운로드하고 프로그램 파일을 교체한 후 자동 재시작합니다.
-
-사용자 데이터가 있는 `%LOCALAPPDATA%\SWCouponManager\`는 업데이트 ZIP과 교체 대상에 포함되지 않습니다.
+실행 시 `Ke9318/summonerswar-coupon-manager`의 최신 GitHub Release를 확인합니다. 사용자가 업데이트를 누르면 `SWCouponManager-win-x64.zip`을 임시 폴더에 다운로드하고 프로그램 파일만 교체한 뒤 자동 재시작합니다. `%LOCALAPPDATA%\SWCouponManager\`의 사용자 데이터는 업데이트 대상에 포함되지 않습니다.
 
 ## 로컬 빌드
-
-.NET 8 SDK가 설치된 Windows에서 실행합니다.
 
 ```powershell
 dotnet restore -r win-x64 -p:SelfContained=false
@@ -53,7 +47,7 @@ dotnet build -c Release -r win-x64 --no-restore
 dotnet publish -c Release -r win-x64 --self-contained false --no-restore -o publish
 ```
 
-저장 및 백업 복구 자체 테스트:
+저장·백업 복구, 후보 파서, Hive 결과 분류, 상태별 재시도 정책 자체 테스트:
 
 ```powershell
 .\publish\SWCouponManager.exe --self-test
@@ -61,6 +55,6 @@ dotnet publish -c Release -r win-x64 --self-contained false --no-restore -o publ
 
 ## GitHub Release
 
-프로젝트의 `<Version>`과 일치하는 `v1.1.0`, `v1.2.0` 형식의 태그를 push하면 `.github/workflows/release.yml`이 Windows x64 framework-dependent 배포본을 만들고 다음 이름으로 업로드합니다.
+프로젝트 `<Version>`과 일치하는 `v1.0.0`, `v1.2.0` 형식의 태그를 push하면 `.github/workflows/release.yml`이 Windows x64 framework-dependent 배포본을 만들고 다음 이름으로 업로드합니다.
 
 `SWCouponManager-win-x64.zip`

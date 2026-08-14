@@ -346,8 +346,11 @@ public sealed class MainForm : Form
     {
         if (!_state.History.TryGetValue(accountId, out var perAccount)) return false;
         if (!perAccount.TryGetValue(code, out var rec)) return false;
-        return rec.Status is "success" or "already" or "expired" or "invalid";
+        return IsCompletedStatus(rec.Status);
     }
+
+    internal static bool IsCompletedStatus(string? status) =>
+        status is "success" or "already" or "expired" or "invalid";
 
     private async Task RunAsync(bool _)
     {

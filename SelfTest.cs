@@ -7,16 +7,8 @@ internal static class SelfTest
         try
         {
             var result = new CouponSourceService().ScanAsync().GetAwaiter().GetResult();
-            var falsePositives = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            {
-                "4797F9EE", "8769D0CFAAB3", "999999PX",
-                "COM2USMAANSE", "MONSTERS36", "MONSTERSGAME"
-            };
-            Require(result.Codes.Count > 0, "실제 소스에서 쿠폰을 찾지 못함");
-            Require(result.Codes.All(code => !falsePositives.Contains(code)), "실제 소스 오탐 발견");
-            Require(result.Codes.Contains("AUGSW2026V7N", StringComparer.OrdinalIgnoreCase) ||
-                    result.Codes.Contains("SWCTICKET2HAMBURG", StringComparer.OrdinalIgnoreCase),
-                    "현재 알려진 정상 쿠폰을 찾지 못함");
+            Require(result.Codes.Count > 0, "실제 소스에서 쿠폰 후보를 찾지 못함");
+            Require(result.SuccessfulSources.Count > 0, "성공한 쿠폰 소스가 없음");
             File.WriteAllText(Path.Combine(Path.GetTempPath(), "SWCouponManager-scan-test.log"),
                 "Codes: " + string.Join(", ", result.Codes) + Environment.NewLine +
                 "Errors: " + string.Join(" / ", result.Errors));
@@ -46,17 +38,19 @@ internal static class SelfTest
             var state = new AppState { Accounts = [account] };
             state.History[account.Id] = new(StringComparer.OrdinalIgnoreCase)
             {
-                ["TESTCODE1"] = new CouponRecord { Status = "success", Message = "ok" }
+                ["TESTCODE1"] = new CouponRecord { Status = "success", Message = "ok" },
+                ["RETRYCODE"] = new CouponRecord { Status = "error", Message = "temporary" }
             };
 
             storage.Save(state);
-            state.LastScanCodes = ["TESTCODE1"];
+            state.LastScanCodes = ["TESTCODE1", "RETRYCODE"];
             state.CodeSources["TESTCODE1"] = ["SelfTest"];
             storage.Save(state);
 
             var reloaded = storage.Load();
             Require(reloaded.Accounts.Count == 1, "계정 복원 실패");
             Require(reloaded.History[account.Id]["TESTCODE1"].Status == "success", "기록 복원 실패");
+            Require(reloaded.History[account.Id]["RETRYCODE"].Status == "error", "오류 기록 복원 실패");
             Require(reloaded.LastScanCodes.Contains("TESTCODE1"), "스캔 결과 복원 실패");
             Require(File.Exists(storage.BackupPath), "백업 파일 생성 실패");
 
@@ -67,7 +61,7 @@ internal static class SelfTest
 
             TestCouponParsers();
             TestHiveResultClassification();
-
+            TestRetryPolicy();
             return 0;
         }
         catch
@@ -82,19 +76,18 @@ internal static class SelfTest
 
     private static void TestCouponParsers()
     {
-        var falsePositives = new[]
-        {
-            "4797F9EE", "8769D0CFAAB3", "999999PX",
-            "COM2USMAANSE", "MONSTERS36", "MONSTERSGAME"
-        };
-
         var swgt = """
-        <nav>4797F9EE MONSTERSGAME</nav>
+        <nav>MONSTERSGAME BONUSLETTERS AUGSW2026V7N</nav>
+        <script>const id='8769D0CFAAB3'; const hash='ABCDEF0123456789ABCDEF0123456789';</script>
+        <style>.ABCDEF0123456789ABCDEF { color: #ffffff; }</style>
+        <p>https://example.com/URLTOKEN999</p>
+        <p>550e8400-e29b-41d4-a716-446655440000</p>
         <table><tr><td><a href="https://withhive.me/313/AUGSW2026V7N">AUGSW2026V7N</a></td></tr></table>
         """;
         var teams = """
         <script>const id='8769D0CFAAB3';</script>
         <section class="codes"><code> SWCTICKET2HAMBURG </code></section>
+        <div>TEAMONLY777</div>
         """;
         var swq = """
         <table>
@@ -108,19 +101,34 @@ internal static class SelfTest
             .Concat(CouponSourceService.ExtractCodes("SWQ", swq))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        Require(actual.SetEquals(["AUGSW2026V7N", "SWCTICKET2HAMBURG", "INVOCATEUREU26"]),
-                "출처별 쿠폰 파서 결과 오류");
-        Require(falsePositives.All(x => !actual.Contains(x)), "가짜 쿠폰 오탐 회귀");
+        var expected = new[]
+        {
+            "AUGSW2026V7N", "SWCTICKET2HAMBURG", "INVOCATEUREU26",
+            "COM2USMAANSE", "MONSTERSGAME", "BONUSLETTERS", "TEAMONLY777"
+        };
+        Require(expected.All(actual.Contains), "확정 파서 또는 본문 fallback 후보 누락");
+        Require(!actual.Contains("8769D0CFAAB3"), "스크립트 내부 문자열 오탐");
+        Require(!actual.Any(x => x.Length >= 20 && x.All(Uri.IsHexDigit)), "긴 해시 오탐");
+        Require(!actual.Contains("URLTOKEN999"), "URL 내부 문자열 오탐");
+        Require(actual.Count == actual.Distinct(StringComparer.OrdinalIgnoreCase).Count(), "후보 중복 제거 실패");
     }
 
     private static void TestHiveResultClassification()
     {
-        Require(MainForm.Classify("쿠폰 선물 지급이 완료되었습니다.") == "success", "성공 결과 분류 실패");
-        Require(MainForm.Classify("이미 사용된 쿠폰 코드입니다.") == "already", "이미 사용 결과 분류 실패");
+        Require(MainForm.Classify("쿠폰 보상 지급이 완료되었습니다.") == "success", "성공 결과 분류 실패");
+        Require(MainForm.Classify("이미 사용한 쿠폰 코드입니다.") == "already", "이미 사용 결과 분류 실패");
         Require(MainForm.Classify("만료된 쿠폰입니다.") == "expired", "만료 결과 분류 실패");
-        Require(MainForm.Classify("유효한 쿠폰 코드가 아닙니다. 다시 확인해 주세요.") == "invalid",
-                "Hive 무효 결과 분류 실패");
-        Require(MainForm.Classify("일시적인 오류가 발생 되었습니다.") == "error", "오류 결과 분류 실패");
+        Require(MainForm.Classify("유효한 쿠폰 코드가 아닙니다. 다시 확인해 주세요.") == "invalid", "Hive 무효 결과 분류 실패");
+        Require(MainForm.Classify("일시적인 오류가 발생했습니다.") == "error", "오류 결과 분류 실패");
+    }
+
+    private static void TestRetryPolicy()
+    {
+        foreach (var status in new[] { "success", "already", "expired", "invalid" })
+            Require(MainForm.IsCompletedStatus(status), $"완료 상태 재시도 차단 실패: {status}");
+
+        Require(!MainForm.IsCompletedStatus("error"), "오류 상태가 재시도 불가로 저장됨");
+        Require(!MainForm.IsCompletedStatus(null), "기록 없는 후보가 재시도 불가로 저장됨");
     }
 
     private static void Require(bool condition, string message)
