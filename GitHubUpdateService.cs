@@ -15,7 +15,7 @@ public sealed class GitHubUpdateService
 
     public GitHubUpdateService()
     {
-        _http.DefaultRequestHeaders.UserAgent.ParseAdd("SWCouponManager/1.0.1");
+        _http.DefaultRequestHeaders.UserAgent.ParseAdd("SWCouponManager/1.1.0");
         _http.DefaultRequestHeaders.Accept.Add(
             new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
     }
