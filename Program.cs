@@ -11,6 +11,9 @@ internal static class Program
         try
         {
             ApplicationConfiguration.Initialize();
+            if (!RuntimePrerequisiteChecker.EnsureAvailable())
+                return 2;
+
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
             Application.ThreadException += (_, e) => CrashReporter.Report(e.Exception);
             AppDomain.CurrentDomain.UnhandledException += (_, e) =>
