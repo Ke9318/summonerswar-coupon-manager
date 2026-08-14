@@ -497,36 +497,68 @@ public sealed class MainForm : Form
         if (!fillResult.Contains("\"ok\":true", StringComparison.OrdinalIgnoreCase))
             return ("error", fillResult);
 
-        for (var i = 0; i < 60; i++)
+        var confirmationClicked = false;
+        for (var i = 0; i < 120; i++)
         {
             ct.ThrowIfCancellationRequested();
-            await Task.Delay(300, ct);
+            await Task.Delay(250, ct);
 
             var poll = await _web.ExecuteScriptAsync("""
             (() => {
-              const els = [...document.querySelectorAll(
-                '[role="dialog"],.modal,.popup,.layer,.alert,.pop_wrap,.popup_wrap,#EVTpop_coupon'
-              )].filter(e => {
-                const s = getComputedStyle(e);
-                const r = e.getBoundingClientRect();
-                return s.display !== 'none' && s.visibility !== 'hidden' && r.width > 0 && r.height > 0;
-              });
-              const txt = els.map(e => e.innerText || e.textContent || '').join('\n').trim();
-              return txt;
+              const visible = el => {
+                if (!el) return false;
+                const style = getComputedStyle(el);
+                return style.display !== 'none' && style.visibility !== 'hidden' &&
+                       (el.offsetParent !== null || el.getClientRects().length > 0);
+              };
+              const result = document.querySelector('#EVTpop_1');
+              if (visible(result)) {
+                const message = result.querySelector('p')?.innerText ||
+                                result.innerText || result.textContent || '';
+                return JSON.stringify({kind:'result', message:message.trim()});
+              }
+              const confirm = document.querySelector('#EVTpop_coupon');
+              if (visible(confirm)) {
+                const message = confirm.querySelector('p')?.innerText ||
+                                confirm.innerText || confirm.textContent || '';
+                return JSON.stringify({kind:'confirm', message:message.trim()});
+              }
+              return JSON.stringify({kind:'waiting', message:''});
             })();
             """);
 
-            var message = UnwrapJsString(poll).Trim();
-            if (message.Length < 2) continue;
-            if (!Regex.IsMatch(message, "쿠폰|coupon|사용|used|만료|expired|성공|success|보상|reward|유효|invalid|오류|error", RegexOptions.IgnoreCase))
+            var pollJson = UnwrapJsString(poll);
+            using var pollDoc = JsonDocument.Parse(pollJson);
+            var root = pollDoc.RootElement;
+            var kind = root.GetProperty("kind").GetString() ?? "waiting";
+            var message = root.GetProperty("message").GetString()?.Trim() ?? "";
+
+            if (kind == "confirm" && !confirmationClicked)
+            {
+                var clicked = await _web.ExecuteScriptAsync("""
+                (() => {
+                  const button = document.querySelector('#EVTbtn_1');
+                  if (!button) return false;
+                  button.click();
+                  return true;
+                })();
+                """);
+                if (!string.Equals(clicked, "true", StringComparison.OrdinalIgnoreCase))
+                    return ("error", "쿠폰 사용 확인 버튼을 누르지 못했습니다.");
+                confirmationClicked = true;
                 continue;
+            }
+
+            if (kind != "result" || message.Length < 2) continue;
 
             var status = Classify(message);
             if (status != "unknown")
                 return (status, message);
         }
 
-        return ("error", "결과창을 제한 시간 안에 인식하지 못했습니다.");
+        return ("error", confirmationClicked
+            ? "쿠폰 사용 요청 후 결과를 제한 시간 안에 받지 못했습니다."
+            : "쿠폰 확인 결과를 제한 시간 안에 받지 못했습니다.");
     }
 
     private void Record(WorkItem item, string status, string message)
@@ -542,14 +574,14 @@ public sealed class MainForm : Form
         };
     }
 
-    private static string Classify(string message)
+    internal static string Classify(string message)
     {
         var m = message.ToLowerInvariant();
 
         if (Regex.IsMatch(m, "already|used|이미\\s*사용|사용한|등록된")) return "already";
         if (Regex.IsMatch(m, "expired|만료")) return "expired";
         if (Regex.IsMatch(m, "success|complete|reward|성공|완료|보상|지급")) return "success";
-        if (Regex.IsMatch(m, "invalid|not valid|유효하지|존재하지|wrong|잘못된|없는 쿠폰")) return "invalid";
+        if (Regex.IsMatch(m, "invalid|not valid|유효하지|유효한.*아닙니다|존재하지|wrong|잘못된|없는 쿠폰")) return "invalid";
         if (Regex.IsMatch(m, "error|오류|fail|실패")) return "error";
         return "unknown";
     }
