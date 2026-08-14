@@ -2,6 +2,33 @@ namespace SWCouponManager;
 
 internal static class SelfTest
 {
+    public static int RunLiveScan()
+    {
+        try
+        {
+            var result = new CouponSourceService().ScanAsync().GetAwaiter().GetResult();
+            var falsePositives = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "4797F9EE", "8769D0CFAAB3", "999999PX",
+                "COM2USMAANSE", "MONSTERS36", "MONSTERSGAME"
+            };
+            Require(result.Codes.Count > 0, "실제 소스에서 쿠폰을 찾지 못함");
+            Require(result.Codes.All(code => !falsePositives.Contains(code)), "실제 소스 오탐 발견");
+            Require(result.Codes.Contains("AUGSW2026V7N", StringComparer.OrdinalIgnoreCase) ||
+                    result.Codes.Contains("SWCTICKET2HAMBURG", StringComparer.OrdinalIgnoreCase),
+                    "현재 알려진 정상 쿠폰을 찾지 못함");
+            File.WriteAllText(Path.Combine(Path.GetTempPath(), "SWCouponManager-scan-test.log"),
+                "Codes: " + string.Join(", ", result.Codes) + Environment.NewLine +
+                "Errors: " + string.Join(" / ", result.Errors));
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            File.WriteAllText(Path.Combine(Path.GetTempPath(), "SWCouponManager-scan-test.log"), ex.ToString());
+            return 1;
+        }
+    }
+
     public static int Run()
     {
         var root = Path.Combine(Path.GetTempPath(), "SWCouponManagerSelfTest", Guid.NewGuid().ToString("N"));
@@ -38,6 +65,8 @@ internal static class SelfTest
             Require(recovered.Accounts.Count == 1, "손상 파일 백업 복구 실패");
             Require(recovered.History[account.Id]["TESTCODE1"].Status == "success", "백업 기록 복구 실패");
 
+            TestCouponParsers();
+
             return 0;
         }
         catch
@@ -48,6 +77,39 @@ internal static class SelfTest
         {
             try { Directory.Delete(root, true); } catch { }
         }
+    }
+
+    private static void TestCouponParsers()
+    {
+        var falsePositives = new[]
+        {
+            "4797F9EE", "8769D0CFAAB3", "999999PX",
+            "COM2USMAANSE", "MONSTERS36", "MONSTERSGAME"
+        };
+
+        var swgt = """
+        <nav>4797F9EE MONSTERSGAME</nav>
+        <table><tr><td><a href="https://withhive.me/313/AUGSW2026V7N">AUGSW2026V7N</a></td></tr></table>
+        """;
+        var teams = """
+        <script>const id='8769D0CFAAB3';</script>
+        <section class="codes"><code> SWCTICKET2HAMBURG </code></section>
+        """;
+        var swq = """
+        <table>
+          <tr><td>COM2USMAANSE</td><td>Expired</td></tr>
+          <tr><td>INVOCATEUREU26</td><td>Active</td></tr>
+        </table>
+        """;
+
+        var actual = CouponSourceService.ExtractCodes("SWGT", swgt)
+            .Concat(CouponSourceService.ExtractCodes("SW-Teams", teams))
+            .Concat(CouponSourceService.ExtractCodes("SWQ", swq))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        Require(actual.SetEquals(["AUGSW2026V7N", "SWCTICKET2HAMBURG", "INVOCATEUREU26"]),
+                "출처별 쿠폰 파서 결과 오류");
+        Require(falsePositives.All(x => !actual.Contains(x)), "가짜 쿠폰 오탐 회귀");
     }
 
     private static void Require(bool condition, string message)
