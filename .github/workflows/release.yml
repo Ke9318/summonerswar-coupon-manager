@@ -22,7 +22,7 @@ jobs:
           dotnet-version: "8.0.x"
 
       - name: Restore
-        run: dotnet restore -r win-x64 -p:SelfContained=true
+        run: dotnet restore -r win-x64 -p:SelfContained=false
 
       - name: Verify tag matches project version
         shell: pwsh
@@ -35,7 +35,7 @@ jobs:
           }
 
       - name: Publish
-        run: dotnet publish -c Release -r win-x64 --self-contained true --no-restore -o publish
+        run: dotnet publish -c Release -r win-x64 --self-contained false --no-restore -o publish
 
       - name: Run self-test
         shell: pwsh
@@ -48,6 +48,18 @@ jobs:
         run: |
           if (-not (Test-Path -LiteralPath publish\SWCouponManager.exe)) {
             throw "SWCouponManager.exe was not published"
+          }
+          $forbidden = @(
+            'coreclr.dll', 'clrjit.dll', 'hostfxr.dll', 'hostpolicy.dll',
+            'System.Private.CoreLib.dll', 'Microsoft.WindowsDesktop.App.runtimeconfig.json'
+          )
+          foreach ($name in $forbidden) {
+            if (Test-Path -LiteralPath (Join-Path publish $name)) {
+              throw "Framework runtime file must not be included: $name"
+            }
+          }
+          if (-not (Test-Path -LiteralPath publish\SWCouponManager.runtimeconfig.json)) {
+            throw "Framework-dependent runtimeconfig is missing"
           }
 
       - name: Create ZIP
