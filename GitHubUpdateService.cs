@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 
 namespace SWCouponManager;
@@ -15,7 +16,7 @@ public sealed class GitHubUpdateService
 
     public GitHubUpdateService()
     {
-        _http.DefaultRequestHeaders.UserAgent.ParseAdd("SWCouponManager/1.1.1");
+        _http.DefaultRequestHeaders.UserAgent.ParseAdd("SWCouponManager/1.1.2");
         _http.DefaultRequestHeaders.Accept.Add(
             new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
     }
@@ -83,6 +84,10 @@ public sealed class GitHubUpdateService
         var exePath = Environment.ProcessPath ??
                       Path.Combine(appDir, "SWCouponManager.exe");
         var pid = Environment.ProcessId;
+        var logPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "SWCouponManager",
+            "update.log");
 
         // 종료 후 교체가 가능한 위치인지 미리 확인한다.
         var writeProbe = Path.Combine(appDir, ".update-write-test");
@@ -96,28 +101,53 @@ public sealed class GitHubUpdateService
         $source = '{{EscapePs(stagingDir)}}'
         $dest = '{{EscapePs(appDir)}}'
         $exe = '{{EscapePs(exePath)}}'
+        $log = '{{EscapePs(logPath)}}'
 
-        try { Wait-Process -Id $pidToWait -Timeout 30 -ErrorAction SilentlyContinue } catch {}
-        Start-Sleep -Milliseconds 500
-
-        $lastError = $null
-        for ($attempt = 1; $attempt -le 5; $attempt++) {
-          try {
-            Get-ChildItem -LiteralPath $source | ForEach-Object {
-              Copy-Item -LiteralPath $_.FullName -Destination $dest -Recurse -Force
-            }
-            $lastError = $null
-            break
-          } catch {
-            $lastError = $_
-            Start-Sleep -Seconds 1
-          }
+        function Write-UpdateLog([string]$message) {
+          Add-Content -LiteralPath $log -Value "[$([DateTimeOffset]::Now.ToString('o'))] $message" -Encoding UTF8
         }
-        if ($null -ne $lastError) { throw $lastError }
 
-        Start-Process -FilePath $exe -WorkingDirectory $dest
+        try {
+          Write-UpdateLog '업데이트 적용 시작'
+
+          # Windows PowerShell 5.1에서도 동작하도록 Wait-Process -Timeout을 사용하지 않는다.
+          for ($wait = 0; $wait -lt 60; $wait++) {
+            if (-not (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue)) { break }
+            Start-Sleep -Milliseconds 500
+          }
+          if (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {
+            throw '기존 프로그램이 30초 안에 종료되지 않았습니다.'
+          }
+
+          $lastError = $null
+          for ($attempt = 1; $attempt -le 10; $attempt++) {
+            try {
+              Get-ChildItem -LiteralPath $source | ForEach-Object {
+                Copy-Item -LiteralPath $_.FullName -Destination $dest -Recurse -Force
+              }
+              $lastError = $null
+              break
+            } catch {
+              $lastError = $_
+              Write-UpdateLog "파일 교체 재시도 $attempt : $($_.Exception.Message)"
+              Start-Sleep -Seconds 1
+            }
+          }
+          if ($null -ne $lastError) { throw $lastError }
+          if (-not (Test-Path -LiteralPath $exe)) { throw "실행 파일이 없습니다: $exe" }
+
+          $started = Start-Process -FilePath $exe -WorkingDirectory $dest -PassThru
+          Start-Sleep -Milliseconds 800
+          if ($started.HasExited) {
+            throw "새 프로그램이 즉시 종료되었습니다. 종료 코드: $($started.ExitCode)"
+          }
+          Write-UpdateLog "업데이트 완료, 새 프로세스 ID: $($started.Id)"
+        } catch {
+          Write-UpdateLog "업데이트 실패: $($_ | Out-String)"
+        }
         """;
-        await File.WriteAllTextAsync(script, ps, ct);
+        // Windows PowerShell 5.1이 한글 설치 경로를 정확히 읽도록 BOM을 포함한다.
+        await File.WriteAllTextAsync(script, ps, new UTF8Encoding(true), ct);
 
         progress?.Invoke("업데이트 적용을 위해 자동 재시작합니다...");
 
