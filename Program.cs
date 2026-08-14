@@ -7,6 +7,8 @@ internal static class Program
     {
         if (args.Contains("--self-test", StringComparer.OrdinalIgnoreCase))
             return SelfTest.Run();
+        if (args.Contains("--scan-test", StringComparer.OrdinalIgnoreCase))
+            return SelfTest.RunLiveScan();
 
         try
         {
