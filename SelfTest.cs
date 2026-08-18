@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace SWCouponManager;
 
 internal static class SelfTest
@@ -40,7 +42,9 @@ internal static class SelfTest
             state.History[account.Id] = new(StringComparer.OrdinalIgnoreCase)
             {
                 ["TESTCODE1"] = new CouponRecord { Status = "success", Message = "ok" },
-                ["RETRYCODE"] = new CouponRecord { Status = "error", Message = "temporary" }
+                ["RETRYCODE"] = new CouponRecord { Status = "error", Message = "temporary" },
+                ["WORLD"] = new CouponRecord { Status = "invalid", Message = "past false positive" },
+                ["DELETEDMANUAL1"] = new CouponRecord { Status = "invalid", Message = "removed from manual" }
             };
 
             storage.Save(state);
@@ -53,6 +57,8 @@ internal static class SelfTest
             Require(reloaded.Accounts[0].Server == "europe", "계정별 서버 복원 실패");
             Require(reloaded.History[account.Id]["TESTCODE1"].Status == "success", "기록 복원 실패");
             Require(reloaded.History[account.Id]["RETRYCODE"].Status == "error", "오류 기록 복원 실패");
+            Require(reloaded.History[account.Id]["WORLD"].Status == "invalid", "과거 invalid 오탐 기록 복원 실패");
+            Require(reloaded.History[account.Id]["DELETEDMANUAL1"].Status == "invalid", "삭제된 Manual 코드 기록 복원 실패");
             Require(reloaded.LastScanCodes.Contains("TESTCODE1"), "스캔 결과 복원 실패");
             Require(File.Exists(storage.BackupPath), "백업 파일 생성 실패");
 
@@ -60,6 +66,7 @@ internal static class SelfTest
             var recovered = storage.Load();
             Require(recovered.Accounts.Count == 1, "손상 파일 백업 복구 실패");
             Require(recovered.History[account.Id]["TESTCODE1"].Status == "success", "백업 기록 복구 실패");
+            Require(recovered.History[account.Id]["WORLD"].Status == "invalid", "백업에서 과거 오탐 기록 복구 실패");
 
             TestCouponParsers();
             TestHiveResultClassification();
@@ -68,6 +75,9 @@ internal static class SelfTest
             TestSeenCodes();
             TestSourceMerging();
             TestSourceFailureIsolation();
+            TestExplicitSourcePreservation();
+            TestHistoryControlsQueue();
+            TestSwgtEmptyParserDetection();
             return 0;
         }
         catch
@@ -196,6 +206,80 @@ internal static class SelfTest
         var result = service.ScanAsync().GetAwaiter().GetResult();
         Require(result.Codes.SequenceEqual(["VALIDCODE123"]), "일부 소스 실패 시 정상 결과 유실");
         Require(result.Errors.Count == 2, "웹/원격 후보 실패가 독립 오류로 기록되지 않음");
+    }
+
+    private static void TestExplicitSourcePreservation()
+    {
+        var required = new[]
+        {
+            "4MINGYIDAOXIAN", "YYDSSWC26ZAN", "H4MBURGISWAITING", "HURRASWC2026",
+            "SWC2026JUELEBA", "912XUXIECHUANQI", "12YJUSTHALFWAY", "ENTERTHESWCERA",
+            "WASWIRDSWC2026", "SWC2026ROADTOWF", "IGYEORA4WF2026", "OQKR1STWFNUGU"
+        };
+
+        var swgtCodes = required.Take(10).ToArray();
+        var swgtHtml = string.Join("", swgtCodes.Select(code => $"<code>{code}</code>"));
+        var swgt = CouponSourceService.ExtractCodes("SWGT", swgtHtml);
+        Require(swgt.Count == 10 && swgtCodes.All(swgt.Contains), "SWGT 명시적 코드 전부 보존 실패");
+
+        var teamsHtml = "<table><tr><th>Coupon Code</th></tr>" +
+            string.Join("", required.Select(code => $"<tr><td>{code}</td></tr>")) + "</table>";
+        var teams = CouponSourceService.ExtractCodes("SW-Teams", teamsHtml);
+        Require(required.All(teams.Contains), "SW-Teams 명시적 코드 전부 보존 실패");
+
+        var swqHtml = "<table><tr><th>Code</th></tr>" +
+            string.Join("", required.Select(code => $"<tr><td>{code}</td></tr>")) + "</table>";
+        var swq = CouponSourceService.ExtractCodes("SWQ", swqHtml);
+        Require(required.All(swq.Contains), "SWQ 명시적 코드 전부 보존 실패");
+
+        var manualJson = JsonSerializer.Serialize(new { codes = required });
+        var manual = CouponSourceService.ExtractRemoteCandidates(manualJson);
+        Require(required.All(manual.Contains), "GitHub Manual 코드 전부 보존 실패");
+
+        var unusual = CouponSourceService.ExtractCodes("SWGT",
+            "<code>ABOUT</code><code>AAAAAAAA</code><code>12345</code><code>ABC123</code>");
+        Require(new[] { "ABOUT", "AAAAAAAA", "12345", "ABC123" }.All(unusual.Contains),
+            "명시적 코드에 과도한 모양 필터 적용");
+    }
+
+    private static void TestHistoryControlsQueue()
+    {
+        var accountId = "account-a";
+        var history = new Dictionary<string, Dictionary<string, CouponRecord>>
+        {
+            [accountId] = new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["SUCCESS1"] = new() { Status = "success" },
+                ["ALREADY1"] = new() { Status = "already" },
+                ["EXPIRED1"] = new() { Status = "expired" },
+                ["INVALID1"] = new() { Status = "invalid" },
+                ["ERROR1"] = new() { Status = "error" },
+                ["WORLD"] = new() { Status = "invalid" },
+                ["DELETEDMANUAL1"] = new() { Status = "invalid" }
+            }
+        };
+
+        foreach (var code in new[] { "SUCCESS1", "ALREADY1", "EXPIRED1", "INVALID1", "WORLD", "DELETEDMANUAL1" })
+            Require(!MainForm.ShouldProcess(history, accountId, code), $"확정 결과 재시도 차단 실패: {code}");
+        Require(MainForm.ShouldProcess(history, accountId, "ERROR1"), "error 다음 실행 재시도 실패");
+        Require(MainForm.ShouldProcess(history, accountId, "SEENBUTUNTRIED"),
+            "SeenCodes와 무관한 계정별 미처리 후보 실행 실패");
+        Require(MainForm.ShouldProcess(history, "account-b", "INVALID1"), "다른 계정 독립 처리 실패");
+    }
+
+    private static void TestSwgtEmptyParserDetection()
+    {
+        var sources = new[]
+        {
+            new CouponSource("SWGT", "swgt"),
+            new CouponSource("SWQ", "swq")
+        };
+        var service = new CouponSourceService(sources, (source, _) => Task.FromResult(
+            source.Name == "SWGT" ? "<html><body>layout changed</body></html>" : "<code>BACKUPCODE1</code>"));
+        var result = service.ScanAsync().GetAwaiter().GetResult();
+        Require(result.Codes.SequenceEqual(["BACKUPCODE1"]), "SWGT 파서 실패 시 다른 소스 결과 유실");
+        Require(result.Errors.Any(error => error == "SWGT: 쿠폰 코드를 찾지 못했습니다."),
+            "SWGT 0개 파서 실패 감지 누락");
     }
 
     private static void Require(bool condition, string message)

@@ -12,7 +12,9 @@ Windows용 Summoners War 쿠폰 검색·자동 등록 GUI 프로그램입니다.
 - GUI 계정 추가·수정·삭제·선택, 계정별 서버 드롭다운, 새 쿠폰 찾기·받기, 진행 상황 및 처리 기록
 - GitHub Releases 기반 자동 업데이트 및 자동 재시작
 
-탐지는 쿠폰 누락 방지를 우선합니다. Hive 링크, `<code>` 영역, 쿠폰 테이블 열, JSON의 명시적 코드 필드, 쿠폰 문맥에 붙은 문자열만 읽으며 페이지 전체 영문 문자열은 수집하지 않습니다. `coupon_candidates.json`을 수정하면 프로그램 업데이트 없이 원격 후보를 추가할 수 있고, 실제 유효 여부는 Hive의 응답으로 최종 판정합니다.
+탐지는 쿠폰 누락 방지를 우선합니다. Hive 링크, `<code>` 영역, 쿠폰 테이블 열, JSON의 명시적 코드 필드처럼 쿠폰으로 표시된 영역은 공백·HTML·URL·비정상 장문만 최소 정리하며 코드 모양으로 제외하지 않습니다. 쿠폰 문맥 없는 페이지 전체 영문 문자열은 수집하지 않습니다. `coupon_candidates.json`을 수정하면 프로그램 업데이트 없이 원격 후보를 추가할 수 있고, 실제 유효 여부는 Hive의 응답으로 최종 판정합니다.
+
+`SeenCodes`는 화면의 “새 쿠폰 후보” 개수만 계산합니다. 실제 실행 여부는 계정별 `History[accountId][code]`로 판단하므로, 이전에 발견했더라도 해당 계정에서 완료 판정이 없으면 Hive 검증 큐에 포함됩니다. `success`, `already`, `expired`, `invalid`는 영구 재시도하지 않고 `error`만 다음 실행에서 재시도합니다.
 
 ## 사용자 데이터
 
@@ -55,6 +57,6 @@ dotnet publish -c Release -r win-x64 --self-contained false --no-restore -o publ
 
 ## GitHub Release
 
-프로젝트 `<Version>`과 일치하는 `v1.0.0`, `v1.3.0` 형식의 태그를 push하면 `.github/workflows/release.yml`이 Windows x64 framework-dependent 배포본을 만들고 다음 이름으로 업로드합니다.
+프로젝트 `<Version>`과 일치하는 `v1.0.0`, `v1.3.1` 형식의 태그를 push하면 `.github/workflows/release.yml`이 Windows x64 framework-dependent 배포본을 만들고 다음 이름으로 업로드합니다.
 
 `SWCouponManager-win-x64.zip`

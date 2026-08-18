@@ -34,13 +34,16 @@ public sealed class CouponSourceService
     };
 
     private static readonly Regex HiveLinkCode = new(
-        @"withhive\.me/313/(?<code>[A-Z0-9]{5,40})(?:[^A-Z0-9]|$)",
+        @"withhive\.me/313/(?<code>[A-Z0-9]{1,80})(?:[^A-Z0-9]|$)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex CodeTag = new(
         @"<code\b[^>]*>(?<code>[\s\S]*?)</code>",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex ExplicitJsonField = new(
-        "[\\\"](?:code|coupon|couponCode|promoCode)[\\\"]\\s*:\\s*[\\\"](?<code>[A-Z0-9]{5,40})[\\\"]",
+        "[\\\"](?:code|coupon|couponCode|promoCode)[\\\"]\\s*:\\s*[\\\"](?<code>[^\\\"\\r\\n]{1,160})[\\\"]",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex ExplicitCodeAttribute = new(
+        "(?:data-(?:coupon-?)?code|data-coupon|coupon(?:-?code)?)\\s*=\\s*['\\\"](?<code>[^'\\\"]{1,160})['\\\"]",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex Table = new(
         @"<table\b[^>]*>(?<table>[\s\S]*?)</table>",
@@ -68,7 +71,7 @@ public sealed class CouponSourceService
     {
         _sources = DefaultSources;
         _fetch = FetchDefaultAsync;
-        _http.DefaultRequestHeaders.UserAgent.ParseAdd("SWCouponManager/1.3.0");
+        _http.DefaultRequestHeaders.UserAgent.ParseAdd("SWCouponManager/1.3.1");
         _http.DefaultRequestHeaders.CacheControl = new() { NoCache = true };
     }
 
@@ -91,7 +94,9 @@ public sealed class CouponSourceService
                     ? ExtractRemoteCandidates(payload)
                     : ExtractCodes(source.Name, payload);
                 if (codes.Count == 0 && source.Name != "GitHub Manual")
-                    throw new InvalidOperationException("쿠폰 후보를 찾지 못했습니다.");
+                    throw new InvalidOperationException(source.Name == "SWGT"
+                        ? "쿠폰 코드를 찾지 못했습니다."
+                        : "쿠폰 후보를 찾지 못했습니다.");
                 return new SourceScan(source.Name, codes, null);
             }
             catch (Exception ex)
@@ -151,19 +156,21 @@ public sealed class CouponSourceService
         var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (Match match in HiveLinkCode.Matches(html))
-            AddIfPlausible(match.Groups["code"].Value, result);
+            AddExplicit(match.Groups["code"].Value, result);
         foreach (Match match in CodeTag.Matches(html))
-            AddIfPlausible(match.Groups["code"].Value, result);
+            AddExplicit(match.Groups["code"].Value, result);
         foreach (Match match in ExplicitJsonField.Matches(html))
-            AddIfPlausible(match.Groups["code"].Value, result);
+            AddExplicit(match.Groups["code"].Value, result);
+        foreach (Match match in ExplicitCodeAttribute.Matches(html))
+            AddExplicit(match.Groups["code"].Value, result);
         foreach (var candidate in ExtractCouponTableCodes(sourceName, html))
-            AddIfPlausible(candidate, result);
+            AddExplicit(candidate, result);
 
         var visibleText = DecodeText(HiddenContent.Replace(html, " "));
         foreach (Match match in ContextThenCode.Matches(visibleText))
-            AddIfPlausible(match.Groups["code"].Value, result);
+            AddContextCandidate(match.Groups["code"].Value, result);
         foreach (Match match in CodeThenContext.Matches(visibleText))
-            AddIfPlausible(match.Groups["code"].Value, result);
+            AddContextCandidate(match.Groups["code"].Value, result);
 
         return result.OrderBy(x => x).ToList();
     }
@@ -179,10 +186,12 @@ public sealed class CouponSourceService
         foreach (var entry in codes.EnumerateArray())
         {
             if (entry.ValueKind == JsonValueKind.String)
-                AddIfPlausible(entry.GetString() ?? "", result);
+                AddExplicit(entry.GetString() ?? "", result);
             else if (entry.ValueKind == JsonValueKind.Object &&
                      entry.TryGetProperty("code", out var code))
-                AddIfPlausible(code.GetString() ?? "", result);
+                AddExplicit(code.ValueKind == JsonValueKind.String
+                    ? code.GetString() ?? ""
+                    : code.ToString(), result);
         }
         return result.OrderBy(x => x).ToList();
     }
@@ -210,7 +219,20 @@ public sealed class CouponSourceService
         }
     }
 
-    private static void AddIfPlausible(string raw, HashSet<string> output)
+    private static void AddExplicit(string raw, HashSet<string> output)
+    {
+        var decoded = DecodeText(raw).Trim();
+        if (decoded.Length == 0 || decoded.Length > 80) return;
+        if (decoded.Contains("://", StringComparison.OrdinalIgnoreCase) ||
+            decoded.StartsWith("www.", StringComparison.OrdinalIgnoreCase)) return;
+
+        var code = Regex.Replace(decoded, @"\s+", "").ToUpperInvariant();
+        if (code.Length == 0 || code.Length > 80) return;
+        if (code.IndexOfAny(['<', '>', '{', '}', '[', ']']) >= 0) return;
+        output.Add(code);
+    }
+
+    private static void AddContextCandidate(string raw, HashSet<string> output)
     {
         var code = DecodeText(raw).Replace(" ", "").Trim().ToUpperInvariant();
         if (!AllowedCode.IsMatch(code)) return;

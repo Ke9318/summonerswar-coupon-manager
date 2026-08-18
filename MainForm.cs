@@ -375,10 +375,16 @@ public sealed class MainForm : Form
     }
 
     private bool IsDone(string accountId, string code)
+        => !ShouldProcess(_state.History, accountId, code);
+
+    internal static bool ShouldProcess(
+        Dictionary<string, Dictionary<string, CouponRecord>> history,
+        string accountId,
+        string code)
     {
-        if (!_state.History.TryGetValue(accountId, out var perAccount)) return false;
-        if (!perAccount.TryGetValue(code, out var rec)) return false;
-        return IsCompletedStatus(rec.Status);
+        if (!history.TryGetValue(accountId, out var perAccount)) return true;
+        if (!perAccount.TryGetValue(code, out var rec)) return true;
+        return !IsCompletedStatus(rec.Status);
     }
 
     internal static bool IsCompletedStatus(string? status) =>
@@ -462,7 +468,7 @@ public sealed class MainForm : Form
                 _storage.Save(_state);
             }
 
-            SetStatus($"완료 · 새 쿠폰 {queue.Count}개 처리");
+            SetStatus($"완료 · 쿠폰 후보 {queue.Count}개 처리");
         }
         catch (OperationCanceledException)
         {
@@ -683,7 +689,7 @@ public sealed class MainForm : Form
         "already" => "이미 사용",
         "expired" => "만료",
         "invalid" => "사용할 수 없음",
-        "error" => "오류",
+        "error" => "오류 - 다음 실행에서 재시도",
         _ => status
     };
 
