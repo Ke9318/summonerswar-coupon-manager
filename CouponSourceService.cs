@@ -1,145 +1,212 @@
 using System.Net;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace SWCouponManager;
 
 public sealed class CouponSourceService
 {
+    internal const string RemoteCandidatesUrl =
+        "https://raw.githubusercontent.com/Ke9318/summonerswar-coupon-manager/main/coupon_candidates.json";
+
     private readonly HttpClient _http = new(new HttpClientHandler
     {
         AutomaticDecompression = DecompressionMethods.All
-    })
-    {
-        Timeout = TimeSpan.FromSeconds(15)
-    };
+    }) { Timeout = TimeSpan.FromSeconds(15) };
 
-    private static readonly CouponSource[] Sources =
+    private readonly CouponSource[] _sources;
+    private readonly Func<CouponSource, CancellationToken, Task<string>> _fetch;
+
+    private static readonly CouponSource[] DefaultSources =
     [
         new("SWGT", "https://swgt.io/gamecodes"),
         new("SW-Teams", "https://sw-teams.ovh/codes"),
-        new("SWQ", "https://swq.jp/")
+        new("SWQ", "https://swq.jp/"),
+        new("GitHub Manual", RemoteCandidatesUrl)
     ];
 
     private static readonly HashSet<string> UiWords = new(StringComparer.OrdinalIgnoreCase)
     {
-        "ACTIVE", "AVAILABLE", "CODES", "COMMUNITY", "ACCOUNT", "DASHBOARD",
-        "PASSWORD", "USERNAME", "REWARDS", "PRIVACY", "CONTACT", "COOKIE",
-        "JAVASCRIPT", "CONTENT", "WINDOWS"
+        "ABOUT", "ACCESS", "ACTIVELY", "ACTIVE", "AVAILABLE", "CODES",
+        "COMMUNITY", "ACCOUNT", "DASHBOARD", "PASSWORD", "USERNAME",
+        "REWARDS", "PRIVACY", "CONTACT", "COOKIE", "JAVASCRIPT",
+        "CONTENT", "WINDOWS"
     };
 
-    private static readonly Regex SwgtLink = new(
-        "<a\\b(?=[^>]*\\bhref\\s*=\\s*['\\\"][^'\\\"]*withhive\\.me[^'\\\"]*['\\\"])[^>]*>(?<code>[^<]+)</a>",
+    private static readonly Regex HiveLinkCode = new(
+        @"withhive\.me/313/(?<code>[A-Z0-9]{5,40})(?:[^A-Z0-9]|$)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex CodeTag = new(
-        @"<code\b[^>]*>(?<code>[^<]+)</code>",
+        @"<code\b[^>]*>(?<code>[\s\S]*?)</code>",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex ExplicitJsonField = new(
+        "[\\\"](?:code|coupon|couponCode|promoCode)[\\\"]\\s*:\\s*[\\\"](?<code>[A-Z0-9]{5,40})[\\\"]",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex Table = new(
+        @"<table\b[^>]*>(?<table>[\s\S]*?)</table>",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex TableRow = new(
         @"<tr\b[^>]*>(?<row>[\s\S]*?)</tr>",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex TableCell = new(
-        @"<td\b[^>]*>(?<cell>[\s\S]*?)</td>",
+        @"<t[hd]\b[^>]*>(?<cell>[\s\S]*?)</t[hd]>",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex StripHtml = new(@"<[^>]+>", RegexOptions.Compiled);
     private static readonly Regex HiddenContent = new(
         @"<!--[\s\S]*?-->|<(script|style)\b[^>]*>[\s\S]*?</\1>",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex Url = new(@"https?://\S+|www\.\S+", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex GuidText = new(
-        @"\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b",
+    private static readonly Regex StripHtml = new(@"<[^>]+>", RegexOptions.Compiled);
+    private static readonly Regex ContextThenCode = new(
+        @"(?:coupon(?:\s*code)?|promo(?:\s*code)?|game\s*code|쿠폰(?:\s*코드)?|프로모션\s*코드)\s*[:#\-]?\s*(?<code>[A-Z0-9]{5,40})(?![A-Z0-9])",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex BroadCandidate = new(
-        @"(?<![A-Z0-9])[A-Z0-9]{5,40}(?![A-Z0-9])",
+    private static readonly Regex CodeThenContext = new(
+        @"(?<![A-Z0-9])(?<code>[A-Z0-9]{5,40})\s*(?:coupon|promo\s*code|쿠폰|프로모션\s*코드)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex AllowedCode = new(@"^[A-Z0-9]{5,40}$", RegexOptions.Compiled);
     private static readonly Regex LongHexHash = new(@"^[0-9A-F]{20,}$", RegexOptions.Compiled);
 
     public CouponSourceService()
     {
-        _http.DefaultRequestHeaders.UserAgent.ParseAdd("SWCouponManager/1.2");
+        _sources = DefaultSources;
+        _fetch = FetchDefaultAsync;
+        _http.DefaultRequestHeaders.UserAgent.ParseAdd("SWCouponManager/1.3.0");
         _http.DefaultRequestHeaders.CacheControl = new() { NoCache = true };
+    }
+
+    internal CouponSourceService(
+        CouponSource[] sources,
+        Func<CouponSource, CancellationToken, Task<string>> fetch)
+    {
+        _sources = sources;
+        _fetch = fetch;
     }
 
     public async Task<ScanResult> ScanAsync(CancellationToken ct = default)
     {
-        var merged = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
-        var errors = new List<string>();
-
-        var tasks = Sources.Select(async source =>
+        var tasks = _sources.Select(async source =>
         {
             try
             {
-                var separator = source.Url.Contains('?') ? "&" : "?";
-                var html = await _http.GetStringAsync(
-                    source.Url + separator + "_=" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), ct);
-                var codes = ExtractCodes(source.Name, html);
-                if (codes.Count == 0)
-                    throw new InvalidOperationException("활성 쿠폰 코드를 찾지 못했습니다.");
-                return (source, codes, error: (string?)null);
+                var payload = await _fetch(source, ct);
+                var codes = source.Name == "GitHub Manual"
+                    ? ExtractRemoteCandidates(payload)
+                    : ExtractCodes(source.Name, payload);
+                if (codes.Count == 0 && source.Name != "GitHub Manual")
+                    throw new InvalidOperationException("쿠폰 후보를 찾지 못했습니다.");
+                return new SourceScan(source.Name, codes, null);
             }
             catch (Exception ex)
             {
-                return (source, codes: new List<string>(), error: ex.Message);
+                return new SourceScan(source.Name, [], ex.Message);
             }
         });
 
-        var results = await Task.WhenAll(tasks);
-        foreach (var result in results)
+        return MergeResults(await Task.WhenAll(tasks));
+    }
+
+    private async Task<string> FetchDefaultAsync(CouponSource source, CancellationToken ct)
+    {
+        var separator = source.Url.Contains('?') ? "&" : "?";
+        var url = source.Url + separator + "_=" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        return await _http.GetStringAsync(url, ct);
+    }
+
+    internal static ScanResult MergeResults(IEnumerable<SourceScan> results)
+    {
+        var all = results.ToList();
+        var merged = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        var errors = new List<string>();
+
+        foreach (var result in all)
         {
-            if (result.error is not null)
+            if (result.Error is not null)
             {
-                errors.Add($"{result.source.Name}: {result.error}");
+                errors.Add($"{result.Source}: {result.Error}");
                 continue;
             }
 
-            foreach (var code in result.codes)
+            foreach (var code in result.Codes)
             {
                 if (!merged.TryGetValue(code, out var sourceNames))
                     merged[code] = sourceNames = new(StringComparer.OrdinalIgnoreCase);
-                sourceNames.Add(result.source.Name);
+                sourceNames.Add(result.Source);
             }
         }
 
-        var successfulSources = results.Where(r => r.error is null).Select(r => r.source.Name).ToList();
+        var successfulSources = all.Where(r => r.Error is null).Select(r => r.Source).ToList();
         if (successfulSources.Count == 0)
             throw new InvalidOperationException("모든 쿠폰 소스가 실패했습니다: " + string.Join(" / ", errors));
 
         return new ScanResult(
             merged.Keys.OrderBy(x => x).ToList(),
-            merged.ToDictionary(k => k.Key, v => v.Value.OrderBy(x => x).ToList(),
-                                StringComparer.OrdinalIgnoreCase),
+            merged.ToDictionary(
+                pair => pair.Key,
+                pair => pair.Value.OrderBy(x => x).ToList(),
+                StringComparer.OrdinalIgnoreCase),
             successfulSources,
             errors);
     }
 
     internal static List<string> ExtractCodes(string sourceName, string html)
     {
-        IEnumerable<string> candidates = sourceName switch
-        {
-            "SWGT" => SwgtLink.Matches(html).Select(m => m.Groups["code"].Value),
-            "SW-Teams" => CodeTag.Matches(html).Select(m => m.Groups["code"].Value),
-            "SWQ" => ExtractSwqRows(html),
-            _ => []
-        };
-
         var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var candidate in candidates)
+
+        foreach (Match match in HiveLinkCode.Matches(html))
+            AddIfPlausible(match.Groups["code"].Value, result);
+        foreach (Match match in CodeTag.Matches(html))
+            AddIfPlausible(match.Groups["code"].Value, result);
+        foreach (Match match in ExplicitJsonField.Matches(html))
+            AddIfPlausible(match.Groups["code"].Value, result);
+        foreach (var candidate in ExtractCouponTableCodes(sourceName, html))
             AddIfPlausible(candidate, result);
 
-        // Keep source-specific parsing, then broaden from visible page text.
-        // Hive is the final authority for whether a candidate is a real coupon.
-        foreach (Match match in BroadCandidate.Matches(GetVisibleText(html)))
-            AddIfPlausible(match.Value, result);
+        var visibleText = DecodeText(HiddenContent.Replace(html, " "));
+        foreach (Match match in ContextThenCode.Matches(visibleText))
+            AddIfPlausible(match.Groups["code"].Value, result);
+        foreach (Match match in CodeThenContext.Matches(visibleText))
+            AddIfPlausible(match.Groups["code"].Value, result);
+
         return result.OrderBy(x => x).ToList();
     }
 
-    private static IEnumerable<string> ExtractSwqRows(string html)
+    internal static List<string> ExtractRemoteCandidates(string json)
     {
-        foreach (Match match in TableRow.Matches(html))
+        using var document = JsonDocument.Parse(json);
+        if (!document.RootElement.TryGetProperty("codes", out var codes) ||
+            codes.ValueKind != JsonValueKind.Array)
+            throw new JsonException("codes 배열이 없습니다.");
+
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in codes.EnumerateArray())
         {
-            var row = match.Groups["row"].Value;
-            var cells = TableCell.Matches(row);
-            if (cells.Count > 0)
-                yield return cells[0].Groups["cell"].Value;
+            if (entry.ValueKind == JsonValueKind.String)
+                AddIfPlausible(entry.GetString() ?? "", result);
+            else if (entry.ValueKind == JsonValueKind.Object &&
+                     entry.TryGetProperty("code", out var code))
+                AddIfPlausible(code.GetString() ?? "", result);
+        }
+        return result.OrderBy(x => x).ToList();
+    }
+
+    private static IEnumerable<string> ExtractCouponTableCodes(string sourceName, string html)
+    {
+        foreach (Match tableMatch in Table.Matches(html))
+        {
+            var rows = TableRow.Matches(tableMatch.Groups["table"].Value)
+                .Select(match => TableCell.Matches(match.Groups["row"].Value)
+                    .Select(cell => DecodeText(cell.Groups["cell"].Value)).ToList())
+                .Where(cells => cells.Count > 0)
+                .ToList();
+            if (rows.Count == 0) continue;
+
+            var codeColumn = rows[0].FindIndex(cell =>
+                Regex.IsMatch(cell, @"\b(code|coupon)\b|쿠폰", RegexOptions.IgnoreCase));
+            var startRow = codeColumn >= 0 ? 1 : 0;
+            if (codeColumn < 0 && sourceName == "SWQ") codeColumn = 0;
+            if (codeColumn < 0) continue;
+
+            for (var rowIndex = startRow; rowIndex < rows.Count; rowIndex++)
+                if (codeColumn < rows[rowIndex].Count)
+                    yield return rows[rowIndex][codeColumn];
         }
     }
 
@@ -154,14 +221,8 @@ public sealed class CouponSourceService
         output.Add(code);
     }
 
-    private static string GetVisibleText(string html)
-    {
-        var visible = HiddenContent.Replace(html, " ");
-        visible = GuidText.Replace(visible, " ");
-        visible = Url.Replace(visible, " ");
-        return DecodeText(visible);
-    }
-
     private static string DecodeText(string value) =>
         WebUtility.HtmlDecode(StripHtml.Replace(value, " ")).Trim();
+
+    internal sealed record SourceScan(string Source, List<string> Codes, string? Error);
 }

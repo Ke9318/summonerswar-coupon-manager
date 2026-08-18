@@ -38,7 +38,10 @@ public sealed class AppStorage
                     state.Accounts ??= [];
                     state.History ??= [];
                     state.LastScanCodes ??= [];
+                    state.SeenCodes ??= [];
                     state.CodeSources ??= [];
+                    if (state.SeenCodes.Count == 0 && state.LastScanCodes.Count > 0)
+                        state.SeenCodes = state.LastScanCodes.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
                     return state;
                 }
             }

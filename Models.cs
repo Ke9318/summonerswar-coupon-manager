@@ -23,6 +23,7 @@ public sealed class AppState
     public List<Account> Accounts { get; set; } = [];
     public Dictionary<string, Dictionary<string, CouponRecord>> History { get; set; } = [];
     public List<string> LastScanCodes { get; set; } = [];
+    public List<string> SeenCodes { get; set; } = [];
     public Dictionary<string, List<string>> CodeSources { get; set; } = [];
     public DateTimeOffset? LastScanAt { get; set; }
     public string Mode { get; set; } = "new";

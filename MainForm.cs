@@ -8,6 +8,15 @@ namespace SWCouponManager;
 public sealed class MainForm : Form
 {
     private const string CouponUrl = "https://event.withhive.com/ci/smon/evt_coupon";
+    private static readonly ServerChoice[] ServerChoices =
+    [
+        new("global", "글로벌 서버"),
+        new("korea", "한국 서버"),
+        new("japan", "일본 서버"),
+        new("china", "중국 서버"),
+        new("asia", "아시아 서버"),
+        new("europe", "유럽 서버")
+    ];
 
     private readonly AppStorage _storage = new();
     private readonly CouponSourceService _sources = new();
@@ -34,7 +43,7 @@ public sealed class MainForm : Form
     };
     private readonly Button _history = new() { Text = "기록 보기" };
     private readonly Button _settings = new() { Text = "설정" };
-    private readonly GroupBox _couponGroup = new() { Text = "사용 가능한 쿠폰", Dock = DockStyle.Fill };
+    private readonly GroupBox _couponGroup = new() { Text = "쿠폰 후보", Dock = DockStyle.Fill };
     private readonly Label _version = new() { AutoSize = true, ForeColor = Color.DimGray };
     private readonly FlowLayoutPanel _advanced = new() { Visible = false, AutoSize = true };
     private readonly ToolTip _codeTip = new();
@@ -122,9 +131,20 @@ public sealed class MainForm : Form
         _accounts.RowHeadersVisible = false;
         _accounts.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
         _accounts.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
-        _accounts.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Use", HeaderText = "사용", FillWeight = 18 });
-        _accounts.Columns.Add(new DataGridViewTextBoxColumn { Name = "Name", HeaderText = "닉네임", FillWeight = 38 });
-        _accounts.Columns.Add(new DataGridViewTextBoxColumn { Name = "HiveId", HeaderText = "Hive ID", FillWeight = 44 });
+        _accounts.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Use", HeaderText = "사용", FillWeight = 12 });
+        _accounts.Columns.Add(new DataGridViewTextBoxColumn { Name = "Name", HeaderText = "닉네임", FillWeight = 25 });
+        _accounts.Columns.Add(new DataGridViewTextBoxColumn { Name = "HiveId", HeaderText = "Hive ID", FillWeight = 38 });
+        _accounts.Columns.Add(new DataGridViewComboBoxColumn
+        {
+            Name = "Server",
+            HeaderText = "서버",
+            FillWeight = 25,
+            FlatStyle = FlatStyle.Flat,
+            DisplayMember = nameof(ServerChoice.DisplayName),
+            ValueMember = nameof(ServerChoice.Value),
+            DataSource = ServerChoices
+        });
+        _accounts.DataError += (_, e) => e.ThrowException = false;
         _accounts.CellEndEdit += (_, _) => SaveGridToState();
         _accounts.CurrentCellDirtyStateChanged += (_, _) =>
         {
@@ -225,7 +245,13 @@ public sealed class MainForm : Form
         var lines = _state.Accounts.SelectMany(account =>
             _state.History.TryGetValue(account.Id, out var records)
                 ? records.OrderByDescending(x => x.Value.Time)
-                    .Select(x => $"{account.Name} · {x.Key} · {DisplayStatus(x.Value.Status)} · {x.Value.Time.LocalDateTime:g}\r\n{x.Value.Message}")
+                    .Select(x =>
+                    {
+                        var sources = _state.CodeSources.TryGetValue(x.Key, out var foundAt)
+                            ? string.Join(", ", foundAt)
+                            : "알 수 없음";
+                        return $"{account.Name} · {x.Key} · {DisplayStatus(x.Value.Status)} · {x.Value.Time.LocalDateTime:g}\r\n출처: {sources}\r\n{x.Value.Message}";
+                    })
                 : []);
         var text = string.Join("\r\n\r\n", lines);
         MessageBox.Show(text.Length == 0 ? "아직 쿠폰 처리 기록이 없습니다." : text,
@@ -248,7 +274,7 @@ public sealed class MainForm : Form
         _accounts.Rows.Clear();
         foreach (var a in _state.Accounts)
         {
-            var idx = _accounts.Rows.Add(a.Selected, a.Name, a.HiveId);
+            var idx = _accounts.Rows.Add(a.Selected, a.Name, a.HiveId, NormalizeServer(a.Server));
             _accounts.Rows[idx].Tag = a.Id;
         }
         _loadingAccounts = false;
@@ -262,6 +288,7 @@ public sealed class MainForm : Form
             var id = row.Tag as string ?? Guid.NewGuid().ToString("N");
             var name = Convert.ToString(row.Cells["Name"].Value)?.Trim() ?? "";
             var hive = Convert.ToString(row.Cells["HiveId"].Value)?.Trim() ?? "";
+            var server = NormalizeServer(Convert.ToString(row.Cells["Server"].Value));
             var selected = Convert.ToBoolean(row.Cells["Use"].Value ?? true);
             if (name.Length == 0 && hive.Length == 0) continue;
 
@@ -271,7 +298,7 @@ public sealed class MainForm : Form
                 Name = name,
                 HiveId = hive,
                 Selected = selected,
-                Server = "korea"
+                Server = server
             });
         }
 
@@ -281,7 +308,7 @@ public sealed class MainForm : Form
 
     private void AddAccountRow()
     {
-        var idx = _accounts.Rows.Add(true, "", "");
+        var idx = _accounts.Rows.Add(true, "", "", "korea");
         _accounts.Rows[idx].Tag = Guid.NewGuid().ToString("N");
         _accounts.CurrentCell = _accounts.Rows[idx].Cells["Name"];
         _accounts.BeginEdit(true);
@@ -304,23 +331,28 @@ public sealed class MainForm : Form
         {
             ToggleWorking(true);
             SetStatus("새 쿠폰을 찾는 중...");
-            var previous = _state.LastScanCodes.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var seen = _state.SeenCodes.ToHashSet(StringComparer.OrdinalIgnoreCase);
             var result = await _sources.ScanAsync();
+            var newCodes = GetNewCodes(result.Codes, seen);
 
             _state.LastScanCodes = result.Codes;
             _state.CodeSources = result.Sources;
+            _state.SeenCodes = seen.Concat(result.Codes)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(code => code)
+                .ToList();
             _state.LastScanAt = DateTimeOffset.Now;
             _storage.Save(_state);
             LoadCodesToUi();
 
-            var newCount = result.Codes.Count(code => !previous.Contains(code));
+            var newCount = newCodes.Count;
             _couponGroup.Text = newCount > 0
-                ? $"새로 찾은 쿠폰 {newCount}개 · 사용 가능한 쿠폰 {result.Codes.Count}개"
-                : $"사용 가능한 쿠폰 {result.Codes.Count}개";
+                ? $"새 쿠폰 후보 {newCount}개 · 전체 후보 {result.Codes.Count}개"
+                : $"쿠폰 후보 {result.Codes.Count}개";
 
             SetStatus(result.Errors.Count == 0
-                ? $"완료 · 새 쿠폰 {newCount}개 발견"
-                : $"완료 · 새 쿠폰 {newCount}개 발견 · 일부 출처를 확인하지 못했습니다.");
+                ? $"완료 · 새 쿠폰 후보 {newCount}개 · 전체 후보 {result.Codes.Count}개"
+                : $"완료 · 새 쿠폰 후보 {newCount}개 · {result.Errors.Count}개 소스 확인 실패");
             return true;
         }
         catch (Exception ex)
@@ -339,7 +371,7 @@ public sealed class MainForm : Form
         _codes.Items.Clear();
         foreach (var code in _state.LastScanCodes)
             _codes.Items.Add(code);
-        _couponGroup.Text = $"사용 가능한 쿠폰 {_state.LastScanCodes.Count}개";
+        _couponGroup.Text = $"쿠폰 후보 {_state.LastScanCodes.Count}개";
     }
 
     private bool IsDone(string accountId, string code)
@@ -351,6 +383,18 @@ public sealed class MainForm : Form
 
     internal static bool IsCompletedStatus(string? status) =>
         status is "success" or "already" or "expired" or "invalid";
+
+    internal static List<string> GetNewCodes(IEnumerable<string> currentCodes, ISet<string> seenCodes) =>
+        currentCodes.Where(code => !seenCodes.Contains(code))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(code => code)
+            .ToList();
+
+    internal static string NormalizeServer(string? server)
+    {
+        var value = server?.Trim().ToLowerInvariant() ?? "";
+        return ServerChoices.Any(choice => choice.Value == value) ? value : "korea";
+    }
 
     private async Task RunAsync(bool _)
     {
@@ -492,6 +536,7 @@ public sealed class MainForm : Form
 
         var accountJson = JsonSerializer.Serialize(item.Account.HiveId);
         var codeJson = JsonSerializer.Serialize(item.Code);
+        var serverJson = JsonSerializer.Serialize(NormalizeServer(item.Account.Server));
 
         var fillScript = $$"""
         (() => {
@@ -505,9 +550,11 @@ public sealed class MainForm : Form
 
           if (!hive || !coupon || !sel || !btn) return JSON.stringify({ok:false,reason:'폼 요소를 찾지 못했습니다.'});
 
-          const ko = [...sel.options].find(o => /한국|korea/i.test(o.textContent || ''));
-          if (!ko) return JSON.stringify({ok:false,reason:'한국 서버 옵션을 찾지 못했습니다.'});
-          sel.value = ko.value;
+          const requestedServer = {{serverJson}};
+          const serverOption = [...sel.options].find(o =>
+            String(o.value || '').toLowerCase() === requestedServer.toLowerCase());
+          if (!serverOption) return JSON.stringify({ok:false,reason:'선택한 서버 옵션을 찾지 못했습니다: ' + requestedServer});
+          sel.value = serverOption.value;
           sel.dispatchEvent(new Event('input',{bubbles:true}));
           sel.dispatchEvent(new Event('change',{bubbles:true}));
           try {
@@ -639,6 +686,8 @@ public sealed class MainForm : Form
         "error" => "오류",
         _ => status
     };
+
+    private sealed record ServerChoice(string Value, string DisplayName);
 
     private static string UnwrapJsString(string json)
     {

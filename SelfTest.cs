@@ -33,6 +33,7 @@ internal static class SelfTest
                 Id = "test-account",
                 Name = "테스트",
                 HiveId = "local-only",
+                Server = "europe",
                 Selected = true
             };
             var state = new AppState { Accounts = [account] };
@@ -49,6 +50,7 @@ internal static class SelfTest
 
             var reloaded = storage.Load();
             Require(reloaded.Accounts.Count == 1, "계정 복원 실패");
+            Require(reloaded.Accounts[0].Server == "europe", "계정별 서버 복원 실패");
             Require(reloaded.History[account.Id]["TESTCODE1"].Status == "success", "기록 복원 실패");
             Require(reloaded.History[account.Id]["RETRYCODE"].Status == "error", "오류 기록 복원 실패");
             Require(reloaded.LastScanCodes.Contains("TESTCODE1"), "스캔 결과 복원 실패");
@@ -62,6 +64,10 @@ internal static class SelfTest
             TestCouponParsers();
             TestHiveResultClassification();
             TestRetryPolicy();
+            TestServerSelection();
+            TestSeenCodes();
+            TestSourceMerging();
+            TestSourceFailureIsolation();
             return 0;
         }
         catch
@@ -77,22 +83,25 @@ internal static class SelfTest
     private static void TestCouponParsers()
     {
         var swgt = """
-        <nav>MONSTERSGAME BONUSLETTERS AUGSW2026V7N</nav>
-        <script>const id='8769D0CFAAB3'; const hash='ABCDEF0123456789ABCDEF0123456789';</script>
-        <style>.ABCDEF0123456789ABCDEF { color: #ffffff; }</style>
-        <p>https://example.com/URLTOKEN999</p>
-        <p>550e8400-e29b-41d4-a716-446655440000</p>
-        <table><tr><td><a href="https://withhive.me/313/AUGSW2026V7N">AUGSW2026V7N</a></td></tr></table>
+        <nav>ABOUT ACCESS ACTIVELY ACCOUNT COMMUNITY DASHBOARD PASSWORD USERNAME PRIVACY CONTACT JAVASCRIPT WINDOWS</nav>
+        <script>const code='SCRIPTCOUPON123';</script>
+        <a href="https://withhive.me/313/912XUXIECHUANQI">받기</a>
+        <code>12YJUSTHALFWAY</code>
+        <p>Coupon code: ENTERTHESWCERA</p>
+        <p>WASWIRDSWC2026 coupon</p>
         """;
         var teams = """
-        <script>const id='8769D0CFAAB3';</script>
-        <section class="codes"><code> SWCTICKET2HAMBURG </code></section>
-        <div>TEAMONLY777</div>
+        <table><tr><th>Name</th><th>Coupon Code</th></tr>
+          <tr><td>Final</td><td>SWC2026ROADTOWF</td></tr>
+          <tr><td>Final</td><td>IGYEORA4WF2026</td></tr>
+        </table>
+        <script type="application/json">{"promoCode":"OQKR1STWFNUGU"}</script>
         """;
         var swq = """
         <table>
-          <tr><td>COM2USMAANSE</td><td>Expired</td></tr>
-          <tr><td>INVOCATEUREU26</td><td>Active</td></tr>
+          <tr><th>Code</th><th>Status</th></tr>
+          <tr><td>4MINGYIDAOXIAN</td><td>Expired</td></tr>
+          <tr><td>YYDSSWC26ZAN</td><td>Active</td></tr>
         </table>
         """;
 
@@ -103,14 +112,24 @@ internal static class SelfTest
 
         var expected = new[]
         {
-            "AUGSW2026V7N", "SWCTICKET2HAMBURG", "INVOCATEUREU26",
-            "COM2USMAANSE", "MONSTERSGAME", "BONUSLETTERS", "TEAMONLY777"
+            "912XUXIECHUANQI", "12YJUSTHALFWAY", "ENTERTHESWCERA",
+            "WASWIRDSWC2026", "SWC2026ROADTOWF", "IGYEORA4WF2026",
+            "OQKR1STWFNUGU", "4MINGYIDAOXIAN", "YYDSSWC26ZAN"
         };
-        Require(expected.All(actual.Contains), "확정 파서 또는 본문 fallback 후보 누락");
-        Require(!actual.Contains("8769D0CFAAB3"), "스크립트 내부 문자열 오탐");
-        Require(!actual.Any(x => x.Length >= 20 && x.All(Uri.IsHexDigit)), "긴 해시 오탐");
-        Require(!actual.Contains("URLTOKEN999"), "URL 내부 문자열 오탐");
+        var uiWords = new[]
+        {
+            "ABOUT", "ACCESS", "ACTIVELY", "ACCOUNT", "COMMUNITY", "DASHBOARD",
+            "PASSWORD", "USERNAME", "PRIVACY", "CONTACT", "JAVASCRIPT", "WINDOWS"
+        };
+        Require(expected.All(actual.Contains), "쿠폰 문맥 후보 누락");
+        Require(uiWords.All(word => !actual.Contains(word)), "일반 UI 단어가 후보에 포함됨");
+        Require(!actual.Contains("SCRIPTCOUPON123"), "JavaScript 내부 문자열 오탐");
         Require(actual.Count == actual.Distinct(StringComparer.OrdinalIgnoreCase).Count(), "후보 중복 제거 실패");
+
+        var remote = CouponSourceService.ExtractRemoteCandidates("""
+        {"codes":[{"code":"SWC2026ROADTOWF","source":"manual"}]}
+        """);
+        Require(remote.SequenceEqual(["SWC2026ROADTOWF"]), "원격 후보 JSON 파싱 실패");
     }
 
     private static void TestHiveResultClassification()
@@ -129,6 +148,54 @@ internal static class SelfTest
 
         Require(!MainForm.IsCompletedStatus("error"), "오류 상태가 재시도 불가로 저장됨");
         Require(!MainForm.IsCompletedStatus(null), "기록 없는 후보가 재시도 불가로 저장됨");
+    }
+
+    private static void TestServerSelection()
+    {
+        foreach (var server in new[] { "global", "korea", "japan", "china", "asia", "europe" })
+            Require(MainForm.NormalizeServer(server) == server, $"서버 값 보존 실패: {server}");
+
+        Require(MainForm.NormalizeServer(null) == "korea", "기존 계정 기본 서버 보정 실패");
+        Require(MainForm.NormalizeServer("unknown") == "korea", "잘못된 서버 기본값 보정 실패");
+    }
+
+    private static void TestSeenCodes()
+    {
+        var seen = new HashSet<string>(["OLD123"], StringComparer.OrdinalIgnoreCase);
+        var newCodes = MainForm.GetNewCodes(["old123", "NEW456", "NEW456"], seen);
+        Require(newCodes.SequenceEqual(["NEW456"]), "SeenCodes 신규 판단 실패");
+    }
+
+    private static void TestSourceMerging()
+    {
+        var result = CouponSourceService.MergeResults(
+        [
+            new("SWGT", ["SHAREDCODE1"], null),
+            new("SW-Teams", ["sharedcode1"], null)
+        ]);
+        Require(result.Codes.Count == 1, "소스 간 코드 중복 제거 실패");
+        Require(result.Sources["SHAREDCODE1"].SequenceEqual(["SW-Teams", "SWGT"]),
+            "중복 코드 출처 목록 보존 실패");
+    }
+
+    private static void TestSourceFailureIsolation()
+    {
+        var sources = new[]
+        {
+            new CouponSource("Good", "good"),
+            new CouponSource("Broken", "broken"),
+            new CouponSource("GitHub Manual", "manual")
+        };
+        var service = new CouponSourceService(sources, (source, _) => source.Name switch
+        {
+            "Good" => Task.FromResult("<code>VALIDCODE123</code>"),
+            "Broken" => throw new HttpRequestException("offline"),
+            _ => Task.FromResult("{ invalid json")
+        });
+
+        var result = service.ScanAsync().GetAwaiter().GetResult();
+        Require(result.Codes.SequenceEqual(["VALIDCODE123"]), "일부 소스 실패 시 정상 결과 유실");
+        Require(result.Errors.Count == 2, "웹/원격 후보 실패가 독립 오류로 기록되지 않음");
     }
 
     private static void Require(bool condition, string message)
