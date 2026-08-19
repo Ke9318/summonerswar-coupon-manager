@@ -5,6 +5,8 @@ Windows용 Summoners War 쿠폰 검색·자동 등록 GUI 프로그램입니다.
 ## 주요 기능
 
 - SWGT, SW-Teams, SWQ의 명시적 쿠폰 영역과 GitHub 원격 후보 목록 수집
+- 핵심 소스 다중 요청, payload hash/advertised count/급감 비교, 최근 관측 코드 grace 보존
+- 스캔 직후 fetch 성공 수·추출 수·보존 수·stale/inconsistent 경고를 보여주는 소스 상태 창
 - 각 소스를 별도 기준 파서로 다시 읽고 production 결과와 차집합 비교
 - HTTP/응답 크기/production·reference 개수/missing·extra를 `scan-health.log`에 기록
 - 여러 출처의 후보를 대소문자 구분 없이 중복 제거하고 출처 함께 표시

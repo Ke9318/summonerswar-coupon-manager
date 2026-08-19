@@ -30,6 +30,7 @@ internal static class SelfTest
             Require(result.Health.All(x => x.HttpSuccess), "하나 이상의 라이브 소스를 검증할 수 없음");
             Require(result.Health.All(x => x.ReferenceCount is not null), "기준 목록을 만들지 못한 소스가 있음");
             Require(result.Health.All(x => x.MissingCodes.Count == 0), "라이브 소스 명시 코드 누락 발생");
+            Require(result.Health.All(x => !x.Suspicious), "라이브 소스가 stale/suspicious 상태임");
             Require(result.Codes.All(result.Sources.ContainsKey), "출처 없는 쿠폰 후보가 있음");
             return 0;
         }
@@ -41,8 +42,9 @@ internal static class SelfTest
     }
 
     private static string FormatHealth(SourceHealth health) =>
-        $"{health.Source}: http={(health.HttpSuccess ? "ok" : "failed")}, bytes={health.PayloadBytes}, " +
+        $"{health.Source}: fetch={health.FetchSuccesses}/{health.FetchAttempts}, hashes=[{string.Join(",", health.PayloadHashes ?? [])}], bytes={health.PayloadBytes}, " +
         $"reference={health.ReferenceCount?.ToString() ?? "unavailable"}, production={health.ProductionCount}, " +
+        $"advertised={health.AdvertisedCount?.ToString() ?? "n/a"}, responses=[{string.Join(",", health.ResponseCodeCounts ?? [])}], retained={health.RetainedRecentCount}, suspicious={health.Suspicious}, " +
         $"missing=[{string.Join(", ", health.MissingCodes)}], extra=[{string.Join(", ", health.ExtraCodes)}], " +
         $"error={health.Error ?? "none"}";
 
@@ -105,6 +107,8 @@ internal static class SelfTest
             TestHistoryControlsQueue();
             TestSwgtEmptyParserDetection();
             TestCapturedSourceCompleteness();
+            TestStaleResponseUnion();
+            TestObservedInventoryGrace();
             return 0;
         }
         catch (Exception ex)
@@ -354,6 +358,42 @@ internal static class SelfTest
             Require(missing.Count == 0, $"{source} 캡처 기준 목록 누락: {string.Join(", ", missing)}");
         }
     }
+
+    private static void TestStaleResponseUnion()
+    {
+        var stale = TeamsPage("A1CODE", "A2CODE", "A3CODE", "A4CODE", "A5CODE", "A6CODE", "A7CODE", "A8CODE");
+        var fresh = TeamsPage("A1CODE", "A2CODE", "A3CODE", "A4CODE", "A5CODE", "A6CODE", "A7CODE", "A8CODE", "INVOCATEUREU26");
+        var service = new CouponSourceService([new("SW-Teams", "fixture")], (_, attempt, _) =>
+            Task.FromResult(attempt == 0 ? stale : fresh));
+        var result = service.ScanAsync(new AppState()).GetAwaiter().GetResult();
+        Require(result.Codes.Count == 9 && result.Codes.Contains("INVOCATEUREU26"), "stale+fresh union 9개 보존 실패");
+        Require(result.Health.Single().Suspicious && result.Health.Single().Warnings!.Contains("inconsistent responses"),
+            "다중 응답 불일치 경고 실패");
+    }
+
+    private static void TestObservedInventoryGrace()
+    {
+        var state = new AppState();
+        state.ObservedCodesBySource["SW-Teams"] = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["SWCTICKET2HAMBURG"] = new()
+            {
+                FirstSeenAt = DateTimeOffset.UtcNow.AddHours(-2),
+                LastSeenAt = DateTimeOffset.UtcNow.AddHours(-1),
+                LastConfirmedAt = DateTimeOffset.UtcNow.AddHours(-1)
+            }
+        };
+        state.SourceInventories["SW-Teams"] = new() { LastHealthyCount = 9, LastHealthyPayloadBytes = 100 };
+        var stale = TeamsPage("A1CODE", "A2CODE", "A3CODE", "A4CODE", "A5CODE", "A6CODE", "A7CODE", "A8CODE");
+        var service = new CouponSourceService([new("SW-Teams", "fixture")], (_, _, _) => Task.FromResult(stale));
+        var result = service.ScanAsync(state).GetAwaiter().GetResult();
+        Require(result.Codes.Count == 9 && result.Codes.Contains("SWCTICKET2HAMBURG"), "observed grace 보존 실패");
+        Require(result.Health.Single().RetainedRecentCount == 1 && result.Health.Single().Suspicious,
+            "observed grace stale 경고 실패");
+    }
+
+    private static string TeamsPage(params string[] codes) =>
+        $"<html><h2>Available Codes ({codes.Length})</h2>{string.Join("", codes.Select(c => $"<code>{c}</code>"))}</html>";
 
     private static void Require(bool condition, string message)
     {

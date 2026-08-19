@@ -26,6 +26,7 @@ public sealed class MainForm : Form
     private readonly DataGridView _accounts = new();
     private readonly ListBox _codes = new();
     private readonly ListBox _results = new();
+    private readonly ListBox _sourceHealth = new();
     private readonly Label _status = new();
     private readonly Button _scan = new() { Text = "새 쿠폰 찾기" };
     private readonly Button _runNew = new() { Text = "새 쿠폰 받기" };
@@ -332,9 +333,10 @@ public sealed class MainForm : Form
             ToggleWorking(true);
             SetStatus("새 쿠폰을 찾는 중...");
             var seen = _state.SeenCodes.ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var result = await _sources.ScanAsync();
+            var result = await _sources.ScanAsync(_state);
             var newCodes = GetNewCodes(result.Codes, seen);
             WriteScanHealth(result);
+            ShowSourceHealth(result);
 
             _state.LastScanCodes = result.Codes;
             _state.CodeSources = result.Sources;
@@ -373,13 +375,27 @@ public sealed class MainForm : Form
         {
             Directory.CreateDirectory(_storage.DataDir);
             File.WriteAllLines(Path.Combine(_storage.DataDir, "scan-health.log"), result.Health.Select(health =>
-                $"[{DateTimeOffset.Now:O}] {health.Source} http={(health.HttpSuccess ? "ok" : "failed")} " +
-                $"bytes={health.PayloadBytes} production={health.ProductionCount} " +
+                $"[{DateTimeOffset.Now:O}] {health.Source} fetch={health.FetchSuccesses}/{health.FetchAttempts} " +
+                $"hashes=[{string.Join(",", health.PayloadHashes ?? [])}] bytes={health.PayloadBytes} production={health.ProductionCount} " +
                 $"reference={health.ReferenceCount?.ToString() ?? "unavailable"} missing={health.MissingCodes.Count} " +
+                $"advertised={health.AdvertisedCount?.ToString() ?? "n/a"} retained={health.RetainedRecentCount} suspicious={health.Suspicious} " +
                 $"missingCodes=[{string.Join(",", health.MissingCodes)}] extra=[{string.Join(",", health.ExtraCodes)}] " +
                 $"error={health.Error ?? "none"}"));
         }
         catch { }
+    }
+
+    private void ShowSourceHealth(ScanResult result)
+    {
+        _sourceHealth.Items.Clear();
+        foreach (var h in result.Health)
+            _sourceHealth.Items.Add($"{h.Source} · fetch {h.FetchSuccesses}/{h.FetchAttempts} · advertised {h.AdvertisedCount?.ToString() ?? "—"} · " +
+                $"extracted {string.Join("/", h.ResponseCodeCounts ?? [])} · union {h.ProductionCount} · retained {h.RetainedRecentCount} · " +
+                (h.Suspicious ? "WARNING " + string.Join(", ", h.Warnings ?? []) : "Healthy"));
+        using var dialog = new Form { Text = "쿠폰 소스 상태", Width = 900, Height = 280, StartPosition = FormStartPosition.CenterParent };
+        _sourceHealth.Dock = DockStyle.Fill;
+        dialog.Controls.Add(_sourceHealth);
+        dialog.ShowDialog(this);
     }
 
     private void LoadCodesToUi()
