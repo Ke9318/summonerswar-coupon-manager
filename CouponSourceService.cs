@@ -1,4 +1,6 @@
 using System.Net;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -15,7 +17,7 @@ public sealed class CouponSourceService
     }) { Timeout = TimeSpan.FromSeconds(15) };
 
     private readonly CouponSource[] _sources;
-    private readonly Func<CouponSource, CancellationToken, Task<string>> _fetch;
+    private readonly Func<CouponSource, int, CancellationToken, Task<string>> _fetch;
 
     private static readonly CouponSource[] DefaultSources =
     [
@@ -87,61 +89,130 @@ public sealed class CouponSourceService
         Func<CouponSource, CancellationToken, Task<string>> fetch)
     {
         _sources = sources;
+        _fetch = (source, _, ct) => fetch(source, ct);
+    }
+
+    internal CouponSourceService(
+        CouponSource[] sources,
+        Func<CouponSource, int, CancellationToken, Task<string>> fetch)
+    {
+        _sources = sources;
         _fetch = fetch;
     }
 
-    public async Task<ScanResult> ScanAsync(CancellationToken ct = default)
+    public async Task<ScanResult> ScanAsync(AppState? state = null, CancellationToken ct = default)
     {
+        state ??= new AppState();
+        state.ObservedCodesBySource ??= [];
+        state.SourceInventories ??= [];
+        var stateGate = new object();
         var tasks = _sources.Select(async source =>
         {
-            string payload;
-            try
+            var attempts = source.Name == "GitHub Manual" ? 1 : 2;
+            var responses = new List<ResponseInventory>();
+            var warnings = new List<string>();
+            for (var attempt = 0; attempt < attempts; attempt++)
             {
-                payload = await _fetch(source, ct);
-            }
-            catch (Exception ex)
-            {
-                return new SourceScan(source.Name, [], new SourceHealth(
-                    source.Name, false, 0, 0, null, [], [], "network: " + ex.Message), ex.Message);
+                try
+                {
+                    var payload = await _fetch(source, attempt, ct);
+                    var supportsReference = source.Name is "SWGT" or "SW-Teams" or "SWQ" or "GitHub Manual";
+                    if (supportsReference) ReferenceInventoryService.ValidateShape(source.Name, payload);
+                    var production = source.Name == "GitHub Manual" ? ExtractRemoteCandidates(payload) : ExtractCodes(source.Name, payload);
+                    var reference = supportsReference ? ReferenceInventoryService.Extract(source.Name, payload) : production;
+                    responses.Add(new(payload, Hash(payload), production, reference,
+                        ReferenceInventoryService.ExtractAdvertisedCount(source.Name, payload)));
+                }
+                catch (Exception ex) { warnings.Add($"fetch {attempt + 1}: {ex.Message}"); }
             }
 
-            try
+            if (responses.Count == 0)
+                return new SourceScan(source.Name, [], new SourceHealth(source.Name, false, 0, 0, null, [], [],
+                    string.Join("; ", warnings), attempts, 0, [], [], null, 0, true, warnings), "모든 요청 실패");
+
+            var union = responses.SelectMany(x => x.Production).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var referenceUnion = responses.SelectMany(x => x.Reference).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var missing = referenceUnion.Except(union, StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+            var extra = union.Except(referenceUnion, StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+            var inconsistent = responses.Select(x => string.Join("\n", x.Production.OrderBy(c => c))).Distinct().Count() > 1;
+            if (inconsistent) warnings.Add("inconsistent responses");
+            foreach (var response in responses.Where(x => x.AdvertisedCount is not null && x.Production.Count < x.AdvertisedCount))
+                warnings.Add($"advertised {response.AdvertisedCount} but extracted {response.Production.Count}");
+            if (missing.Count > 0) warnings.Add($"parser missing {missing.Count}");
+
+            var currentBytes = responses.Max(x => Encoding.UTF8.GetByteCount(x.Payload));
+            SourceInventoryState inventory;
+            lock (stateGate)
+                inventory = state.SourceInventories.TryGetValue(source.Name, out var saved) ? saved : new SourceInventoryState();
+            if (inventory.LastHealthyCount > 0 && union.Count < Math.Ceiling(inventory.LastHealthyCount * .7))
+                warnings.Add($"drastic code drop {inventory.LastHealthyCount}->{union.Count}");
+            if (inventory.LastHealthyPayloadBytes > 0 && currentBytes < inventory.LastHealthyPayloadBytes * .5)
+                warnings.Add($"drastic payload drop {inventory.LastHealthyPayloadBytes}->{currentBytes}");
+
+            var now = DateTimeOffset.UtcNow;
+            var bestHash = responses.OrderByDescending(x => x.Production.Count).First().Hash;
+            List<string> retained;
+            lock (stateGate)
             {
-                var codes = source.Name == "GitHub Manual"
-                    ? ExtractRemoteCandidates(payload)
-                    : ExtractCodes(source.Name, payload);
-                var supportsReference = source.Name is "SWGT" or "SW-Teams" or "SWQ" or "GitHub Manual";
-                if (supportsReference)
-                    ReferenceInventoryService.ValidateShape(source.Name, payload);
-                var reference = supportsReference ? ReferenceInventoryService.Extract(source.Name, payload) : [];
-                var missing = supportsReference
-                    ? reference.Except(codes, StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList()
-                    : [];
-                var extra = supportsReference
-                    ? codes.Except(reference, StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList()
-                    : [];
-                var health = new SourceHealth(
-                    source.Name, true, System.Text.Encoding.UTF8.GetByteCount(payload), codes.Count,
-                    supportsReference ? reference.Count : null, missing, extra, null);
-                return new SourceScan(source.Name, codes, health, null);
+                var observed = state.ObservedCodesBySource.TryGetValue(source.Name, out var existing)
+                    ? existing : new Dictionary<string, ObservedCodeState>(StringComparer.OrdinalIgnoreCase);
+                state.ObservedCodesBySource[source.Name] = observed;
+                foreach (var code in union)
+                {
+                    if (!observed.TryGetValue(code, out var item))
+                        observed[code] = item = new ObservedCodeState { FirstSeenAt = now };
+                    item.LastSeenAt = now; item.LastConfirmedAt = now; item.ConsecutiveMisses = 0; item.LastPayloadHash = bestHash;
+                }
+                foreach (var item in observed.Where(x => !union.Contains(x.Key)).Select(x => x.Value)) item.ConsecutiveMisses++;
+                retained = observed.Where(x => !union.Contains(x.Key) && ShouldRetain(x.Key, x.Value, now)).Select(x => x.Key).ToList();
             }
-            catch (Exception ex)
+            if (retained.Count > 0)
             {
-                return new SourceScan(source.Name, [], new SourceHealth(
-                    source.Name, true, System.Text.Encoding.UTF8.GetByteCount(payload), 0,
-                    null, [], [], "parser: " + ex.Message), ex.Message);
+                union.UnionWith(retained);
+                warnings.Add($"retained {retained.Count} recently observed code(s)");
             }
+
+            var suspicious = warnings.Count > 0;
+            if (!suspicious)
+                lock (stateGate)
+                    state.SourceInventories[source.Name] = new SourceInventoryState
+                    { LastHealthyCount = union.Count, LastHealthyPayloadBytes = currentBytes, LastHealthyAt = now };
+            var advertised = responses.Select(x => x.AdvertisedCount).Where(x => x is not null).DefaultIfEmpty().Max();
+            var health = new SourceHealth(source.Name, true, currentBytes, union.Count, referenceUnion.Count,
+                missing, extra, suspicious ? string.Join("; ", warnings) : null, attempts, responses.Count,
+                responses.Select(x => x.Hash[..12]).ToList(), responses.Select(x => x.Production.Count).ToList(),
+                advertised, retained.Count, suspicious, warnings);
+            return new SourceScan(source.Name, union.OrderBy(x => x).ToList(), health, null);
         });
 
         return MergeResults(await Task.WhenAll(tasks));
     }
 
-    private async Task<string> FetchDefaultAsync(CouponSource source, CancellationToken ct)
+    private async Task<string> FetchDefaultAsync(CouponSource source, int attempt, CancellationToken ct)
     {
-        var separator = source.Url.Contains('?') ? "&" : "?";
-        var url = source.Url + separator + "_=" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        return await _http.GetStringAsync(url, ct);
+        var baseUrl = attempt == 1 && !source.Url.EndsWith('/') ? source.Url + "/" : source.Url;
+        var separator = baseUrl.Contains('?') ? "&" : "?";
+        var url = baseUrl + separator + (attempt == 0 ? "_scm=" : "cachebust=") + Guid.NewGuid().ToString("N");
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.CacheControl = new() { NoCache = true, NoStore = true, MaxAge = TimeSpan.Zero };
+        request.Headers.Pragma.ParseAdd("no-cache");
+        request.Headers.TryAddWithoutValidation("If-Modified-Since", "Thu, 01 Jan 1970 00:00:00 GMT");
+        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseContentRead, ct);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsStringAsync(ct);
     }
+
+    private static bool ShouldRetain(string code, ObservedCodeState item, DateTimeOffset now)
+    {
+        var grace = Regex.IsMatch(code, "SWC|EMBLEM|BADGE|TICKET", RegexOptions.IgnoreCase)
+            ? TimeSpan.FromHours(72) : TimeSpan.FromHours(48);
+        return item.ConsecutiveMisses < 3 || now - item.LastConfirmedAt <= grace;
+    }
+
+    private static string Hash(string payload) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload)));
+
+    private sealed record ResponseInventory(string Payload, string Hash, List<string> Production,
+        List<string> Reference, int? AdvertisedCount);
 
     internal static ScanResult MergeResults(IEnumerable<SourceScan> results)
     {

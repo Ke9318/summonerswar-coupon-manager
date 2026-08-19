@@ -1,5 +1,15 @@
 # Coupon source completeness design
 
+## v1.4.1: payload freshness and inventory completeness
+
+v1.4.0 compared two parsers over one payload. That detects parser regressions, but a stale payload can agree with itself and incorrectly pass. v1.4.1 therefore treats parser agreement as only one signal.
+
+For SWGT, SW-Teams and SWQ the scanner performs two independently keyed, no-cache requests (canonical and trailing-slash routes), records each payload hash/byte size/code set, and uses the union. It validates advertised counts, flags response inconsistency and large count/byte drops, and retains explicitly observed codes for 48 hours or three trusted misses (72 hours for SWC/badge/ticket-like codes).
+
+`ObservedCodesBySource` and the last healthy source inventory are migrated into the existing state file without changing History or SeenCodes semantics. A source is Healthy only when multi-fetch results agree, advertised counts are satisfied, parser/reference missing is zero, and no drastic inventory/payload drop is detected. The source-health dialog and `scan-health.log` expose fetch success, hashes, counts, retained codes, and warnings.
+
+The 2026-08-20 captures are historical/stale evidence, not proof of current completeness. Offline regression tests pair an eight-code stale response with a nine-code response and also verify grace retention when both current responses omit a recently observed ninth code.
+
 ## Why v1.3.3 could pass while codes were missing
 
 The live test only required a non-empty merged result and at least one successful source. It never compared a source's full explicit inventory with that source's production extraction. A partial SWGT or SW-Teams result therefore passed. The v1.3.3 test change also removed the earlier `INVOCATEUREU26` and `SWCTICKET2HAMBURG` parser examples while replacing the broad visible-text fallback with narrower explicit/context patterns. There was no source-count regression gate to expose either change.

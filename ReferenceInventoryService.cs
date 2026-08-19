@@ -33,6 +33,21 @@ internal static class ReferenceInventoryService
         _ => throw new NotSupportedException($"{source} 기준 목록 추출기가 없습니다.")
     };
 
+    internal static int? ExtractAdvertisedCount(string source, string payload)
+    {
+        if (source == "SW-Teams")
+        {
+            var match = Regex.Match(payload, @"Available\s+Codes\s*\(\s*(?<count>\d+)\s*\)", RegexOptions.IgnoreCase);
+            return match.Success ? int.Parse(match.Groups["count"].Value) : null;
+        }
+        if (source == "SWGT")
+        {
+            // The active table has one canonical Hive redemption link per row/code.
+            return ExtractSwgtLinks(payload).Count;
+        }
+        return null;
+    }
+
     private static List<string> ExtractSwgtLinks(string html)
     {
         var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
