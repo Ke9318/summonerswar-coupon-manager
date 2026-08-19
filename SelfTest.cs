@@ -149,6 +149,7 @@ internal static class SelfTest
         Require(MainForm.Classify("만료된 쿠폰입니다.") == "expired", "만료 결과 분류 실패");
         Require(MainForm.Classify("유효한 쿠폰 코드가 아닙니다. 다시 확인해 주세요.") == "invalid", "Hive 무효 결과 분류 실패");
         Require(MainForm.Classify("일시적인 오류가 발생했습니다.") == "error", "오류 결과 분류 실패");
+        Require(MainForm.Classify("예상하지 못한 새 응답 문구") == "error", "미분류 Hive 응답 재시도 보존 실패");
     }
 
     private static void TestRetryPolicy()
@@ -240,6 +241,15 @@ internal static class SelfTest
             "<code>ABOUT</code><code>AAAAAAAA</code><code>12345</code><code>ABC123</code>");
         Require(new[] { "ABOUT", "AAAAAAAA", "12345", "ABC123" }.All(unusual.Contains),
             "명시적 코드에 과도한 모양 필터 적용");
+
+        var currentSwgtShape = """
+        <button class="btn-clipboard" data-clipboard-text="AUGSW2026V7N"></button>
+        <a class="hasVisited gameCodeLink" data-gamecode="AUGSW2026V7N">AUGSW2026V7N</a>
+        <a class="gameCodeLink hasVisited" data-gamecode="SWXFRIEREN2026">SWXFRIEREN2026</a>
+        """;
+        var currentSwgtCodes = CouponSourceService.ExtractCodes("SWGT", currentSwgtShape);
+        Require(currentSwgtCodes.Contains("AUGSW2026V7N"), "SWGT Active data 속성 코드 누락");
+        Require(currentSwgtCodes.Contains("SWXFRIEREN2026"), "SWGT gameCodeLink 코드 누락");
     }
 
     private static void TestHistoryControlsQueue()

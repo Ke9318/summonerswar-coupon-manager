@@ -646,11 +646,8 @@ public sealed class MainForm : Form
             if (kind != "result" || message.Length < 2) continue;
 
             var status = Classify(message);
-            if (status != "unknown")
-            {
-                await _web.ExecuteScriptAsync("document.querySelector('#EVTpop_1 .btn_confirm')?.click();");
-                return (status, message);
-            }
+            await _web.ExecuteScriptAsync("document.querySelector('#EVTpop_1 .btn_confirm')?.click();");
+            return (status, message);
         }
 
         return ("error", confirmationClicked
@@ -680,7 +677,10 @@ public sealed class MainForm : Form
         if (Regex.IsMatch(m, "success|complete|reward|성공|완료|보상|지급")) return "success";
         if (Regex.IsMatch(m, "invalid|not valid|유효하지|유효한.*아닙니다|존재하지|wrong|잘못된|없는 쿠폰")) return "invalid";
         if (Regex.IsMatch(m, "error|오류|fail|실패")) return "error";
-        return "unknown";
+        // Unrecognized Hive responses are operational failures, not final coupon
+        // verdicts. Keeping them retryable prevents a UI wording change from losing a
+        // real coupon while still making error the only retryable stored status.
+        return "error";
     }
 
     private static string DisplayStatus(string status) => status switch
