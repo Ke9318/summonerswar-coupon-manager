@@ -9,6 +9,8 @@ internal static class Program
             return SelfTest.Run();
         if (args.Contains("--scan-test", StringComparer.OrdinalIgnoreCase))
             return SelfTest.RunLiveScan();
+        if (args.Contains("--audit-history", StringComparer.OrdinalIgnoreCase))
+            return HistoryAudit.Run(args);
 
         try
         {

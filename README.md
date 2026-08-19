@@ -5,6 +5,8 @@ Windows용 Summoners War 쿠폰 검색·자동 등록 GUI 프로그램입니다.
 ## 주요 기능
 
 - SWGT, SW-Teams, SWQ의 명시적 쿠폰 영역과 GitHub 원격 후보 목록 수집
+- 각 소스를 별도 기준 파서로 다시 읽고 production 결과와 차집합 비교
+- HTTP/응답 크기/production·reference 개수/missing·extra를 `scan-health.log`에 기록
 - 여러 출처의 후보를 대소문자 구분 없이 중복 제거하고 출처 함께 표시
 - 후보는 선택한 모든 계정에서 공식 Hive 쿠폰 페이지로 한 번씩 검증
 - 성공, 이미 사용, 만료, 무효는 계정별 완료 기록으로 보존하여 재시도하지 않음
@@ -54,6 +56,23 @@ dotnet publish -c Release -r win-x64 --self-contained false --no-restore -o publ
 ```powershell
 .\publish\SWCouponManager.exe --self-test
 ```
+
+실제 네 소스의 명시적 전체 목록과 production 추출 결과를 비교하는 릴리스 게이트:
+
+```powershell
+.\publish\SWCouponManager.exe --scan-test
+Get-Content "$env:TEMP\SWCouponManager-scan-test.log"
+```
+
+`reference - production`에 하나라도 남거나 네트워크/응답 구조를 검증할 수 없으면 종료 코드 1입니다. `production - reference`는 오탐 검토용으로 기록하지만 누락 우선 정책에 따라 실패 조건은 아닙니다.
+
+과거 누락 감사는 사용자의 실제 `%LOCALAPPDATA%\SWCouponManager\state.json`과 배포본의 `known_codes_archive.json`을 입력합니다. 원본 History는 수정하지 않고 같은 폴더에 `state.audit.txt`를 만듭니다.
+
+```powershell
+.\SWCouponManager.exe --audit-history "$env:LOCALAPPDATA\SWCouponManager\state.json" --audit-codes .\known_codes_archive.json
+```
+
+다른 과거 목록은 `{"codes":[{"code":"...","category":"swc-emblem"}]}` JSON 또는 줄 단위 텍스트로 전달할 수 있습니다. 실제 History 파일 없이 과거 수령 여부를 결론낼 수는 없습니다.
 
 ## GitHub Release
 
