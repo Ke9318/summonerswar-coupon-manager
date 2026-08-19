@@ -74,5 +74,8 @@ public sealed record SourceHealth(
     int? AdvertisedCount = null,
     int RetainedRecentCount = 0,
     bool Suspicious = false,
-    List<string>? Warnings = null);
+    List<string>? Warnings = null,
+    int SeedRetainedCount = 0,
+    int ObservedRetainedCount = 0,
+    string FreshnessEvidence = "single response");
 public sealed record WorkItem(Account Account, string Code);

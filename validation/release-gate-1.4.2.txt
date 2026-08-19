@@ -1,0 +1,39 @@
+Release candidate: 1.4.2
+Verified at: 2026-08-19T20:36:24.1682717Z
+
+Build/publish: PASS (0 warnings, 0 errors)
+Self-test: PASS
+Stale regressions: PASS
+  fresh9+extra1
+  advertised9/reference9/production8
+  advertised8/reference9
+  stale8+seed9
+  first-run empty+stale8+seed9
+  same stale payload twice+seed9
+GUI lifecycle: PASS, 10 scan + modal source-health open/close, crash 0
+Retry policy: PASS, success/already/expired/invalid blocked; error retried; SeenCodes display-only
+Live gate: PASS
+
+SW-Teams live health:
+  fetch=2/2
+  raw response hashes=E9A7143C95B1,7B203D0141D5
+  bytes=26753
+  advertised=8
+  reference=8
+  production=10
+  missing=0
+  retained=7
+  seed=7
+  suspicious=true (trusted seed codes retained)
+  freshness=same-origin repeated fetches; agreement is not independent freshness proof
+
+Required historical seed attribution in final ScanResult:
+  AUGSW2026V7N: SW-Teams, SWGT
+  ENTERTHESWCERA: GitHub Manual, SW-Teams
+  IGYEORA4WF2026: GitHub Manual, SW-Teams
+  INVOCATEUREU26: SW-Teams
+  OQKR1STWFNUGU: GitHub Manual, SW-Teams
+  SWC2026ROADTOWF: GitHub Manual, SW-Teams
+  SWCTICKET2HAMBURG: SW-Teams
+  SWXFRIEREN2026: SW-Teams, SWGT
+  WASWIRDSWC2026: GitHub Manual, SW-Teams

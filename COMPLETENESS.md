@@ -4,7 +4,9 @@
 
 v1.4.0 compared two parsers over one payload. That detects parser regressions, but a stale payload can agree with itself and incorrectly pass. v1.4.1 therefore treats parser agreement as only one signal.
 
-For SWGT, SW-Teams and SWQ the scanner performs two independently keyed, no-cache requests (canonical and trailing-slash routes), records each payload hash/byte size/code set, and uses the union. It validates advertised counts, flags response inconsistency and large count/byte drops, and retains explicitly observed codes for 48 hours or three trusted misses (72 hours for SWC/badge/ticket-like codes).
+For SWGT, SW-Teams and SWQ the scanner performs two no-cache requests, records each payload hash/byte size/code set, and uses the union. These requests remain on the same origin and are explicitly reported as non-independent freshness evidence. It validates advertised counts against the independent explicit reference inventory (not the broad production count), flags response inconsistency and large count/byte drops, and retains explicitly observed codes for 48 hours or three trusted misses (72 hours for SWC/badge/ticket-like codes).
+
+`trusted_inventory_seed.json` is a separately modelled, remotely updateable and release-bundled source inventory. Every entry has a source, codes, observation time and TTL. It is not the GitHub Manual candidate source: valid seed codes retain their original source attribution and protect first-run scans from a single shrunken/stale response.
 
 `ObservedCodesBySource` and the last healthy source inventory are migrated into the existing state file without changing History or SeenCodes semantics. A source is Healthy only when multi-fetch results agree, advertised counts are satisfied, parser/reference missing is zero, and no drastic inventory/payload drop is detected. The source-health dialog and `scan-health.log` expose fetch success, hashes, counts, retained codes, and warnings.
 
