@@ -11,8 +11,13 @@ internal static class SelfTest
             var result = new CouponSourceService().ScanAsync().GetAwaiter().GetResult();
             Require(result.Codes.Count > 0, "실제 소스에서 쿠폰 후보를 찾지 못함");
             Require(result.SuccessfulSources.Count > 0, "성공한 쿠폰 소스가 없음");
+            Require(result.Codes.All(result.Sources.ContainsKey), "출처 없는 쿠폰 후보가 있음");
             File.WriteAllText(Path.Combine(Path.GetTempPath(), "SWCouponManager-scan-test.log"),
                 "Codes: " + string.Join(", ", result.Codes) + Environment.NewLine +
+                "Sources:" + Environment.NewLine +
+                string.Join(Environment.NewLine, result.Codes.Select(code =>
+                    $"{code}: {string.Join(", ", result.Sources[code])}")) + Environment.NewLine +
+                "Successful sources: " + string.Join(", ", result.SuccessfulSources) + Environment.NewLine +
                 "Errors: " + string.Join(" / ", result.Errors));
             return 0;
         }

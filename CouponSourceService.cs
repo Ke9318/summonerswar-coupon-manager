@@ -77,7 +77,7 @@ public sealed class CouponSourceService
     {
         _sources = DefaultSources;
         _fetch = FetchDefaultAsync;
-        _http.DefaultRequestHeaders.UserAgent.ParseAdd("SWCouponManager/1.3.2");
+        _http.DefaultRequestHeaders.UserAgent.ParseAdd("SWCouponManager/1.3.3");
         _http.DefaultRequestHeaders.CacheControl = new() { NoCache = true };
     }
 
