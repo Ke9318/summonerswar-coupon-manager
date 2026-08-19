@@ -38,5 +38,15 @@ public sealed record ScanResult(
     List<string> Codes,
     Dictionary<string, List<string>> Sources,
     List<string> SuccessfulSources,
-    List<string> Errors);
+    List<string> Errors,
+    List<SourceHealth> Health);
+public sealed record SourceHealth(
+    string Source,
+    bool HttpSuccess,
+    int PayloadBytes,
+    int ProductionCount,
+    int? ReferenceCount,
+    List<string> MissingCodes,
+    List<string> ExtraCodes,
+    string? Error);
 public sealed record WorkItem(Account Account, string Code);

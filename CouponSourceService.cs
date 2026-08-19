@@ -77,7 +77,8 @@ public sealed class CouponSourceService
     {
         _sources = DefaultSources;
         _fetch = FetchDefaultAsync;
-        _http.DefaultRequestHeaders.UserAgent.ParseAdd("SWCouponManager/1.3.3");
+        var version = typeof(CouponSourceService).Assembly.GetName().Version?.ToString(3) ?? "unknown";
+        _http.DefaultRequestHeaders.UserAgent.ParseAdd("SWCouponManager/" + version);
         _http.DefaultRequestHeaders.CacheControl = new() { NoCache = true };
     }
 
@@ -93,21 +94,42 @@ public sealed class CouponSourceService
     {
         var tasks = _sources.Select(async source =>
         {
+            string payload;
             try
             {
-                var payload = await _fetch(source, ct);
-                var codes = source.Name == "GitHub Manual"
-                    ? ExtractRemoteCandidates(payload)
-                    : ExtractCodes(source.Name, payload);
-                if (codes.Count == 0 && source.Name != "GitHub Manual")
-                    throw new InvalidOperationException(source.Name == "SWGT"
-                        ? "쿠폰 코드를 찾지 못했습니다."
-                        : "쿠폰 후보를 찾지 못했습니다.");
-                return new SourceScan(source.Name, codes, null);
+                payload = await _fetch(source, ct);
             }
             catch (Exception ex)
             {
-                return new SourceScan(source.Name, [], ex.Message);
+                return new SourceScan(source.Name, [], new SourceHealth(
+                    source.Name, false, 0, 0, null, [], [], "network: " + ex.Message), ex.Message);
+            }
+
+            try
+            {
+                var codes = source.Name == "GitHub Manual"
+                    ? ExtractRemoteCandidates(payload)
+                    : ExtractCodes(source.Name, payload);
+                var supportsReference = source.Name is "SWGT" or "SW-Teams" or "SWQ" or "GitHub Manual";
+                if (supportsReference)
+                    ReferenceInventoryService.ValidateShape(source.Name, payload);
+                var reference = supportsReference ? ReferenceInventoryService.Extract(source.Name, payload) : [];
+                var missing = supportsReference
+                    ? reference.Except(codes, StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList()
+                    : [];
+                var extra = supportsReference
+                    ? codes.Except(reference, StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList()
+                    : [];
+                var health = new SourceHealth(
+                    source.Name, true, System.Text.Encoding.UTF8.GetByteCount(payload), codes.Count,
+                    supportsReference ? reference.Count : null, missing, extra, null);
+                return new SourceScan(source.Name, codes, health, null);
+            }
+            catch (Exception ex)
+            {
+                return new SourceScan(source.Name, [], new SourceHealth(
+                    source.Name, true, System.Text.Encoding.UTF8.GetByteCount(payload), 0,
+                    null, [], [], "parser: " + ex.Message), ex.Message);
             }
         });
 
@@ -143,6 +165,9 @@ public sealed class CouponSourceService
             }
         }
 
+        foreach (var result in all.Where(x => x.Health.MissingCodes.Count > 0))
+            errors.Add($"{result.Source}: parser regression; missing [{string.Join(", ", result.Health.MissingCodes)}]");
+
         var successfulSources = all.Where(r => r.Error is null).Select(r => r.Source).ToList();
         if (successfulSources.Count == 0)
             throw new InvalidOperationException("모든 쿠폰 소스가 실패했습니다: " + string.Join(" / ", errors));
@@ -154,7 +179,8 @@ public sealed class CouponSourceService
                 pair => pair.Value.OrderBy(x => x).ToList(),
                 StringComparer.OrdinalIgnoreCase),
             successfulSources,
-            errors);
+            errors,
+            all.Select(x => x.Health).ToList());
     }
 
     internal static List<string> ExtractCodes(string sourceName, string html)
@@ -262,5 +288,10 @@ public sealed class CouponSourceService
     private static string DecodeText(string value) =>
         WebUtility.HtmlDecode(StripHtml.Replace(value, " ")).Trim();
 
-    internal sealed record SourceScan(string Source, List<string> Codes, string? Error);
+    internal sealed record SourceScan(string Source, List<string> Codes, SourceHealth Health, string? Error)
+    {
+        internal SourceScan(string source, List<string> codes, string? error)
+            : this(source, codes, new SourceHealth(source, error is null, 0, codes.Count,
+                null, [], [], error), error) { }
+    }
 }

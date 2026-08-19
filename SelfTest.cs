@@ -9,16 +9,28 @@ internal static class SelfTest
         try
         {
             var result = new CouponSourceService().ScanAsync().GetAwaiter().GetResult();
-            Require(result.Codes.Count > 0, "실제 소스에서 쿠폰 후보를 찾지 못함");
-            Require(result.SuccessfulSources.Count > 0, "성공한 쿠폰 소스가 없음");
-            Require(result.Codes.All(result.Sources.ContainsKey), "출처 없는 쿠폰 후보가 있음");
-            File.WriteAllText(Path.Combine(Path.GetTempPath(), "SWCouponManager-scan-test.log"),
+            var log = "Source health:" + Environment.NewLine +
+                string.Join(Environment.NewLine, result.Health.Select(FormatHealth)) + Environment.NewLine +
                 "Codes: " + string.Join(", ", result.Codes) + Environment.NewLine +
                 "Sources:" + Environment.NewLine +
                 string.Join(Environment.NewLine, result.Codes.Select(code =>
                     $"{code}: {string.Join(", ", result.Sources[code])}")) + Environment.NewLine +
+                "Known code evidence:" + Environment.NewLine +
+                string.Join(Environment.NewLine, new[]
+                {
+                    "AUGSW2026V7N: " + SourcesFor(result, "AUGSW2026V7N"),
+                    "SWXFRIEREN2026: " + SourcesFor(result, "SWXFRIEREN2026"),
+                    "INVOCATEUREU26: " + SourcesFor(result, "INVOCATEUREU26"),
+                    "SWCTICKET2HAMBURG: " + SourcesFor(result, "SWCTICKET2HAMBURG")
+                }) + Environment.NewLine +
                 "Successful sources: " + string.Join(", ", result.SuccessfulSources) + Environment.NewLine +
-                "Errors: " + string.Join(" / ", result.Errors));
+                "Errors: " + string.Join(" / ", result.Errors);
+            File.WriteAllText(Path.Combine(Path.GetTempPath(), "SWCouponManager-scan-test.log"), log);
+            Require(result.Health.Count == 4, "필수 소스 건강 상태가 완전하지 않음");
+            Require(result.Health.All(x => x.HttpSuccess), "하나 이상의 라이브 소스를 검증할 수 없음");
+            Require(result.Health.All(x => x.ReferenceCount is not null), "기준 목록을 만들지 못한 소스가 있음");
+            Require(result.Health.All(x => x.MissingCodes.Count == 0), "라이브 소스 명시 코드 누락 발생");
+            Require(result.Codes.All(result.Sources.ContainsKey), "출처 없는 쿠폰 후보가 있음");
             return 0;
         }
         catch (Exception ex)
@@ -27,6 +39,15 @@ internal static class SelfTest
             return 1;
         }
     }
+
+    private static string FormatHealth(SourceHealth health) =>
+        $"{health.Source}: http={(health.HttpSuccess ? "ok" : "failed")}, bytes={health.PayloadBytes}, " +
+        $"reference={health.ReferenceCount?.ToString() ?? "unavailable"}, production={health.ProductionCount}, " +
+        $"missing=[{string.Join(", ", health.MissingCodes)}], extra=[{string.Join(", ", health.ExtraCodes)}], " +
+        $"error={health.Error ?? "none"}";
+
+    private static string SourcesFor(ScanResult result, string code) =>
+        result.Sources.TryGetValue(code, out var sources) ? string.Join(", ", sources) : "not exposed by current live sources";
 
     public static int Run()
     {
@@ -83,10 +104,12 @@ internal static class SelfTest
             TestExplicitSourcePreservation();
             TestHistoryControlsQueue();
             TestSwgtEmptyParserDetection();
+            TestCapturedSourceCompleteness();
             return 0;
         }
-        catch
+        catch (Exception ex)
         {
+            File.WriteAllText(Path.Combine(Path.GetTempPath(), "SWCouponManager-self-test.log"), ex.ToString());
             return 1;
         }
         finally
@@ -255,6 +278,16 @@ internal static class SelfTest
         var currentSwgtCodes = CouponSourceService.ExtractCodes("SWGT", currentSwgtShape);
         Require(currentSwgtCodes.Contains("AUGSW2026V7N"), "SWGT Active data 속성 코드 누락");
         Require(currentSwgtCodes.Contains("SWXFRIEREN2026"), "SWGT gameCodeLink 코드 누락");
+
+        var historicalTeamsShape = """
+        <section class="codes">
+          <code>INVOCATEUREU26</code>
+          <code>SWCTICKET2HAMBURG</code>
+        </section>
+        """;
+        var historicalTeams = CouponSourceService.ExtractCodes("SW-Teams", historicalTeamsShape);
+        Require(historicalTeams.Contains("INVOCATEUREU26"), "SW-Teams INVOCATEUREU26 회귀");
+        Require(historicalTeams.Contains("SWCTICKET2HAMBURG"), "SW-Teams SWCTICKET2HAMBURG 회귀");
     }
 
     private static void TestHistoryControlsQueue()
@@ -290,11 +323,36 @@ internal static class SelfTest
             new CouponSource("SWQ", "swq")
         };
         var service = new CouponSourceService(sources, (source, _) => Task.FromResult(
-            source.Name == "SWGT" ? "<html><body>layout changed</body></html>" : "<code>BACKUPCODE1</code>"));
+            source.Name == "SWGT"
+                ? "<html><body>layout changed</body></html>"
+                : "<table><tbody id=\"coupons\"><tr><td class=\"code-cell\">BACKUPCODE1</td></tr></tbody></table>"));
         var result = service.ScanAsync().GetAwaiter().GetResult();
         Require(result.Codes.SequenceEqual(["BACKUPCODE1"]), "SWGT 파서 실패 시 다른 소스 결과 유실");
-        Require(result.Errors.Any(error => error == "SWGT: 쿠폰 코드를 찾지 못했습니다."),
+        Require(result.Errors.Any(error => error.StartsWith("SWGT: ", StringComparison.Ordinal)),
             "SWGT 0개 파서 실패 감지 누락");
+    }
+
+    private static void TestCapturedSourceCompleteness()
+    {
+        var fixtureRoot = Path.Combine(AppContext.BaseDirectory, "test-fixtures", "live-captures");
+        var fixtures = new Dictionary<string, string>
+        {
+            ["SWGT"] = "swgt.html",
+            ["SW-Teams"] = "swteams.html",
+            ["SWQ"] = "swq.html",
+            ["GitHub Manual"] = "manual.html"
+        };
+
+        foreach (var (source, file) in fixtures)
+        {
+            var payload = File.ReadAllText(Path.Combine(fixtureRoot, file));
+            var production = source == "GitHub Manual"
+                ? CouponSourceService.ExtractRemoteCandidates(payload)
+                : CouponSourceService.ExtractCodes(source, payload);
+            var reference = ReferenceInventoryService.Extract(source, payload);
+            var missing = reference.Except(production, StringComparer.OrdinalIgnoreCase).ToList();
+            Require(missing.Count == 0, $"{source} 캡처 기준 목록 누락: {string.Join(", ", missing)}");
+        }
     }
 
     private static void Require(bool condition, string message)

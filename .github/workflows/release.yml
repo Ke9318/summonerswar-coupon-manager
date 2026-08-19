@@ -37,11 +37,21 @@ jobs:
       - name: Publish
         run: dotnet publish -c Release -r win-x64 --self-contained false --no-restore -o publish
 
-      - name: Run self-test
+      - name: Run self-test and offline captured-source regressions
         shell: pwsh
         run: |
           $test = Start-Process -FilePath .\publish\SWCouponManager.exe -ArgumentList "--self-test" -Wait -PassThru
           if ($test.ExitCode -ne 0) { throw "Self-test failed with exit code $($test.ExitCode)" }
+
+      - name: Run live source completeness gate
+        shell: pwsh
+        run: |
+          $test = Start-Process -FilePath .\publish\SWCouponManager.exe -ArgumentList "--scan-test" -Wait -PassThru
+          $log = Join-Path $env:TEMP "SWCouponManager-scan-test.log"
+          if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log }
+          if ($test.ExitCode -ne 0) {
+            throw "Live completeness check failed or could not be verified; release is blocked"
+          }
 
       - name: Verify release contents
         shell: pwsh

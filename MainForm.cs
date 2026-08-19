@@ -334,6 +334,7 @@ public sealed class MainForm : Form
             var seen = _state.SeenCodes.ToHashSet(StringComparer.OrdinalIgnoreCase);
             var result = await _sources.ScanAsync();
             var newCodes = GetNewCodes(result.Codes, seen);
+            WriteScanHealth(result);
 
             _state.LastScanCodes = result.Codes;
             _state.CodeSources = result.Sources;
@@ -364,6 +365,21 @@ public sealed class MainForm : Form
         {
             ToggleWorking(false);
         }
+    }
+
+    private void WriteScanHealth(ScanResult result)
+    {
+        try
+        {
+            Directory.CreateDirectory(_storage.DataDir);
+            File.WriteAllLines(Path.Combine(_storage.DataDir, "scan-health.log"), result.Health.Select(health =>
+                $"[{DateTimeOffset.Now:O}] {health.Source} http={(health.HttpSuccess ? "ok" : "failed")} " +
+                $"bytes={health.PayloadBytes} production={health.ProductionCount} " +
+                $"reference={health.ReferenceCount?.ToString() ?? "unavailable"} missing={health.MissingCodes.Count} " +
+                $"missingCodes=[{string.Join(",", health.MissingCodes)}] extra=[{string.Join(",", health.ExtraCodes)}] " +
+                $"error={health.Error ?? "none"}"));
+        }
+        catch { }
     }
 
     private void LoadCodesToUi()
