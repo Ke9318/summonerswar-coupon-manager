@@ -45,6 +45,12 @@ public sealed class CouponSourceService
     private static readonly Regex ExplicitCodeAttribute = new(
         "(?:data-(?:coupon-?)?code|data-coupon|coupon(?:-?code)?)\\s*=\\s*['\\\"](?<code>[^'\\\"]{1,160})['\\\"]",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex SwgtExplicitCodeAttribute = new(
+        "(?:data-gamecode|data-clipboard-text)\\s*=\\s*['\\\"](?<code>[^'\\\"]{1,160})['\\\"]",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex SwgtGameCodeLink = new(
+        "<a\\b(?=[^>]*\\bclass\\s*=\\s*['\\\"][^'\\\"]*\\bgameCodeLink\\b[^'\\\"]*['\\\"])[^>]*>(?<code>[\\s\\S]*?)</a>",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex Table = new(
         @"<table\b[^>]*>(?<table>[\s\S]*?)</table>",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -71,7 +77,7 @@ public sealed class CouponSourceService
     {
         _sources = DefaultSources;
         _fetch = FetchDefaultAsync;
-        _http.DefaultRequestHeaders.UserAgent.ParseAdd("SWCouponManager/1.3.1");
+        _http.DefaultRequestHeaders.UserAgent.ParseAdd("SWCouponManager/1.3.2");
         _http.DefaultRequestHeaders.CacheControl = new() { NoCache = true };
     }
 
@@ -163,6 +169,16 @@ public sealed class CouponSourceService
             AddExplicit(match.Groups["code"].Value, result);
         foreach (Match match in ExplicitCodeAttribute.Matches(html))
             AddExplicit(match.Groups["code"].Value, result);
+        if (sourceName.Equals("SWGT", StringComparison.OrdinalIgnoreCase))
+        {
+            // SWGT currently repeats every Active Code in its Hive URL, data-gamecode,
+            // clipboard value and link text. Preserve all explicit representations so
+            // a harmless markup change in any one of them cannot silently empty the feed.
+            foreach (Match match in SwgtExplicitCodeAttribute.Matches(html))
+                AddExplicit(match.Groups["code"].Value, result);
+            foreach (Match match in SwgtGameCodeLink.Matches(html))
+                AddExplicit(match.Groups["code"].Value, result);
+        }
         foreach (var candidate in ExtractCouponTableCodes(sourceName, html))
             AddExplicit(candidate, result);
 
