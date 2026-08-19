@@ -18,6 +18,9 @@ public sealed class CouponSourceService
 
     private readonly CouponSource[] _sources;
     private readonly Func<CouponSource, int, CancellationToken, Task<string>> _fetch;
+    private readonly string? _trustedSeedJson;
+    private readonly bool _loadDefaultSeed;
+    private readonly Func<DateTimeOffset> _clock;
 
     private static readonly CouponSource[] DefaultSources =
     [
@@ -79,6 +82,8 @@ public sealed class CouponSourceService
     {
         _sources = DefaultSources;
         _fetch = FetchDefaultAsync;
+        _loadDefaultSeed = true;
+        _clock = () => DateTimeOffset.UtcNow;
         var version = typeof(CouponSourceService).Assembly.GetName().Version?.ToString(3) ?? "unknown";
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("SWCouponManager/" + version);
         _http.DefaultRequestHeaders.CacheControl = new() { NoCache = true };
@@ -90,14 +95,19 @@ public sealed class CouponSourceService
     {
         _sources = sources;
         _fetch = (source, _, ct) => fetch(source, ct);
+        _clock = () => DateTimeOffset.UtcNow;
     }
 
     internal CouponSourceService(
         CouponSource[] sources,
-        Func<CouponSource, int, CancellationToken, Task<string>> fetch)
+        Func<CouponSource, int, CancellationToken, Task<string>> fetch,
+        string? trustedSeedJson = null,
+        Func<DateTimeOffset>? clock = null)
     {
         _sources = sources;
         _fetch = fetch;
+        _trustedSeedJson = trustedSeedJson;
+        _clock = clock ?? (() => DateTimeOffset.UtcNow);
     }
 
     public async Task<ScanResult> ScanAsync(AppState? state = null, CancellationToken ct = default)
@@ -105,6 +115,11 @@ public sealed class CouponSourceService
         state ??= new AppState();
         state.ObservedCodesBySource ??= [];
         state.SourceInventories ??= [];
+        var now = _clock();
+        var seedJson = _loadDefaultSeed
+            ? await TrustedInventoryService.LoadDefaultJsonAsync(_http, ct)
+            : _trustedSeedJson;
+        var seeds = TrustedInventoryService.Load(seedJson, now);
         var stateGate = new object();
         var tasks = _sources.Select(async source =>
         {
@@ -130,59 +145,75 @@ public sealed class CouponSourceService
                 return new SourceScan(source.Name, [], new SourceHealth(source.Name, false, 0, 0, null, [], [],
                     string.Join("; ", warnings), attempts, 0, [], [], null, 0, true, warnings), "모든 요청 실패");
 
-            var union = responses.SelectMany(x => x.Production).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var currentUnion = responses.SelectMany(x => x.Production).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var referenceUnion = responses.SelectMany(x => x.Reference).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var missing = referenceUnion.Except(union, StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
-            var extra = union.Except(referenceUnion, StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+            var missing = referenceUnion.Except(currentUnion, StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+            var extra = currentUnion.Except(referenceUnion, StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
             var inconsistent = responses.Select(x => string.Join("\n", x.Production.OrderBy(c => c))).Distinct().Count() > 1;
             if (inconsistent) warnings.Add("inconsistent responses");
-            foreach (var response in responses.Where(x => x.AdvertisedCount is not null && x.Production.Count < x.AdvertisedCount))
-                warnings.Add($"advertised {response.AdvertisedCount} but extracted {response.Production.Count}");
-            if (missing.Count > 0) warnings.Add($"parser missing {missing.Count}");
+            foreach (var response in responses)
+                warnings.AddRange(EvaluateInventoryWarnings(response.AdvertisedCount, response.Reference.Count,
+                    response.Production.Count, response.Reference.Except(response.Production, StringComparer.OrdinalIgnoreCase).Count()));
+            if (missing.Count > 0 && !warnings.Any(x => x.StartsWith("parser missing ", StringComparison.Ordinal)))
+                warnings.Add($"parser missing {missing.Count}");
 
             var currentBytes = responses.Max(x => Encoding.UTF8.GetByteCount(x.Payload));
             SourceInventoryState inventory;
             lock (stateGate)
                 inventory = state.SourceInventories.TryGetValue(source.Name, out var saved) ? saved : new SourceInventoryState();
-            if (inventory.LastHealthyCount > 0 && union.Count < Math.Ceiling(inventory.LastHealthyCount * .7))
-                warnings.Add($"drastic code drop {inventory.LastHealthyCount}->{union.Count}");
+            if (inventory.LastHealthyCount > 0 && currentUnion.Count < Math.Ceiling(inventory.LastHealthyCount * .7))
+                warnings.Add($"drastic code drop {inventory.LastHealthyCount}->{currentUnion.Count}");
             if (inventory.LastHealthyPayloadBytes > 0 && currentBytes < inventory.LastHealthyPayloadBytes * .5)
                 warnings.Add($"drastic payload drop {inventory.LastHealthyPayloadBytes}->{currentBytes}");
 
-            var now = DateTimeOffset.UtcNow;
             var bestHash = responses.OrderByDescending(x => x.Production.Count).First().Hash;
-            List<string> retained;
+            List<string> observedRetained;
             lock (stateGate)
             {
                 var observed = state.ObservedCodesBySource.TryGetValue(source.Name, out var existing)
                     ? existing : new Dictionary<string, ObservedCodeState>(StringComparer.OrdinalIgnoreCase);
                 state.ObservedCodesBySource[source.Name] = observed;
-                foreach (var code in union)
+                foreach (var code in currentUnion)
                 {
                     if (!observed.TryGetValue(code, out var item))
                         observed[code] = item = new ObservedCodeState { FirstSeenAt = now };
                     item.LastSeenAt = now; item.LastConfirmedAt = now; item.ConsecutiveMisses = 0; item.LastPayloadHash = bestHash;
                 }
-                foreach (var item in observed.Where(x => !union.Contains(x.Key)).Select(x => x.Value)) item.ConsecutiveMisses++;
-                retained = observed.Where(x => !union.Contains(x.Key) && ShouldRetain(x.Key, x.Value, now)).Select(x => x.Key).ToList();
+                foreach (var item in observed.Where(x => !currentUnion.Contains(x.Key)).Select(x => x.Value)) item.ConsecutiveMisses++;
+                observedRetained = observed.Where(x => !currentUnion.Contains(x.Key) && ShouldRetain(x.Key, x.Value, now)).Select(x => x.Key).ToList();
             }
-            if (retained.Count > 0)
+            var seedRetained = seeds.TryGetValue(source.Name, out var seed)
+                ? seed.Codes.Except(currentUnion, StringComparer.OrdinalIgnoreCase).ToList()
+                : [];
+            if (seed is not null && referenceUnion.Count < seed.Codes.Count)
+                warnings.Add($"current reference {referenceUnion.Count} smaller than trusted seed {seed.Codes.Count} observed {seed.ObservedAt:O}");
+            if (seedRetained.Count > 0)
+                warnings.Add($"retained {seedRetained.Count} trusted seed code(s)");
+            if (observedRetained.Count > 0)
             {
-                union.UnionWith(retained);
-                warnings.Add($"retained {retained.Count} recently observed code(s)");
+                warnings.Add($"retained {observedRetained.Count} recently observed code(s)");
             }
+
+            var finalUnion = currentUnion.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            finalUnion.UnionWith(referenceUnion);
+            finalUnion.UnionWith(seedRetained);
+            finalUnion.UnionWith(observedRetained);
 
             var suspicious = warnings.Count > 0;
             if (!suspicious)
                 lock (stateGate)
                     state.SourceInventories[source.Name] = new SourceInventoryState
-                    { LastHealthyCount = union.Count, LastHealthyPayloadBytes = currentBytes, LastHealthyAt = now };
+                    { LastHealthyCount = currentUnion.Count, LastHealthyPayloadBytes = currentBytes, LastHealthyAt = now };
             var advertised = responses.Select(x => x.AdvertisedCount).Where(x => x is not null).DefaultIfEmpty().Max();
-            var health = new SourceHealth(source.Name, true, currentBytes, union.Count, referenceUnion.Count,
+            var freshness = responses.Count > 1
+                ? "same-origin repeated fetches; agreement is not independent freshness proof"
+                : "single response; freshness not independently verified";
+            var health = new SourceHealth(source.Name, true, currentBytes, currentUnion.Count, referenceUnion.Count,
                 missing, extra, suspicious ? string.Join("; ", warnings) : null, attempts, responses.Count,
                 responses.Select(x => x.Hash[..12]).ToList(), responses.Select(x => x.Production.Count).ToList(),
-                advertised, retained.Count, suspicious, warnings);
-            return new SourceScan(source.Name, union.OrderBy(x => x).ToList(), health, null);
+                advertised, seedRetained.Count + observedRetained.Count, suspicious, warnings,
+                seedRetained.Count, observedRetained.Count, freshness);
+            return new SourceScan(source.Name, finalUnion.OrderBy(x => x).ToList(), health, null);
         });
 
         return MergeResults(await Task.WhenAll(tasks));
@@ -207,6 +238,17 @@ public sealed class CouponSourceService
         var grace = Regex.IsMatch(code, "SWC|EMBLEM|BADGE|TICKET", RegexOptions.IgnoreCase)
             ? TimeSpan.FromHours(72) : TimeSpan.FromHours(48);
         return item.ConsecutiveMisses < 3 || now - item.LastConfirmedAt <= grace;
+    }
+
+    internal static List<string> EvaluateInventoryWarnings(
+        int? advertised, int referenceCount, int productionCount, int parserMissingCount)
+    {
+        var warnings = new List<string>();
+        if (advertised is not null && advertised != referenceCount)
+            warnings.Add($"advertised {advertised} != reference {referenceCount}");
+        if (parserMissingCount > 0 || productionCount < referenceCount)
+            warnings.Add($"parser missing {Math.Max(parserMissingCount, referenceCount - productionCount)}");
+        return warnings;
     }
 
     private static string Hash(string payload) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload)));

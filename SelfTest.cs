@@ -9,7 +9,8 @@ internal static class SelfTest
         try
         {
             var result = new CouponSourceService().ScanAsync().GetAwaiter().GetResult();
-            var log = "Source health:" + Environment.NewLine +
+            var log = $"Live scan at {DateTimeOffset.UtcNow:O}" + Environment.NewLine +
+                "Source health:" + Environment.NewLine +
                 string.Join(Environment.NewLine, result.Health.Select(FormatHealth)) + Environment.NewLine +
                 "Codes: " + string.Join(", ", result.Codes) + Environment.NewLine +
                 "Sources:" + Environment.NewLine +
@@ -30,13 +31,15 @@ internal static class SelfTest
             Require(result.Health.All(x => x.HttpSuccess), "하나 이상의 라이브 소스를 검증할 수 없음");
             Require(result.Health.All(x => x.ReferenceCount is not null), "기준 목록을 만들지 못한 소스가 있음");
             Require(result.Health.All(x => x.MissingCodes.Count == 0), "라이브 소스 명시 코드 누락 발생");
-            Require(result.Health.All(x => !x.Suspicious), "라이브 소스가 stale/suspicious 상태임");
+            Require(result.Health.All(IsLiveHealthSafelyCovered),
+                "라이브 소스 suspicious 축소분이 seed/grace로 안전하게 보존되지 않음");
             Require(result.Codes.All(result.Sources.ContainsKey), "출처 없는 쿠폰 후보가 있음");
             return 0;
         }
         catch (Exception ex)
         {
-            File.WriteAllText(Path.Combine(Path.GetTempPath(), "SWCouponManager-scan-test.log"), ex.ToString());
+            var path = Path.Combine(Path.GetTempPath(), "SWCouponManager-scan-test.log");
+            File.AppendAllText(path, Environment.NewLine + "GATE FAILURE:" + Environment.NewLine + ex);
             return 1;
         }
     }
@@ -44,12 +47,22 @@ internal static class SelfTest
     private static string FormatHealth(SourceHealth health) =>
         $"{health.Source}: fetch={health.FetchSuccesses}/{health.FetchAttempts}, hashes=[{string.Join(",", health.PayloadHashes ?? [])}], bytes={health.PayloadBytes}, " +
         $"reference={health.ReferenceCount?.ToString() ?? "unavailable"}, production={health.ProductionCount}, " +
-        $"advertised={health.AdvertisedCount?.ToString() ?? "n/a"}, responses=[{string.Join(",", health.ResponseCodeCounts ?? [])}], retained={health.RetainedRecentCount}, suspicious={health.Suspicious}, " +
+        $"advertised={health.AdvertisedCount?.ToString() ?? "n/a"}, responses=[{string.Join(",", health.ResponseCodeCounts ?? [])}], retained={health.RetainedRecentCount}, seed={health.SeedRetainedCount}, observed={health.ObservedRetainedCount}, suspicious={health.Suspicious}, " +
         $"missing=[{string.Join(", ", health.MissingCodes)}], extra=[{string.Join(", ", health.ExtraCodes)}], " +
-        $"error={health.Error ?? "none"}";
+        $"freshness={health.FreshnessEvidence}, error={health.Error ?? "none"}";
 
     private static string SourcesFor(ScanResult result, string code) =>
         result.Sources.TryGetValue(code, out var sources) ? string.Join(", ", sources) : "not exposed by current live sources";
+
+    private static bool IsLiveHealthSafelyCovered(SourceHealth health)
+    {
+        if (!health.Suspicious) return true;
+        if (health.MissingCodes.Count > 0) return false;
+        var warnings = health.Warnings ?? [];
+        return health.SeedRetainedCount > 0 && warnings.All(warning =>
+            warning.StartsWith("current ", StringComparison.Ordinal) ||
+            warning.StartsWith("retained ", StringComparison.Ordinal));
+    }
 
     public static int Run()
     {
@@ -109,6 +122,13 @@ internal static class SelfTest
             TestCapturedSourceCompleteness();
             TestStaleResponseUnion();
             TestObservedInventoryGrace();
+            TestTrustedSeedRegressions();
+            TestSourceHealthLifecycle();
+            File.WriteAllText(Path.Combine(Path.GetTempPath(), "SWCouponManager-self-test.log"),
+                "PASS" + Environment.NewLine +
+                "stale regressions: fresh9+extra1, advertised9/reference9/production8, advertised8/reference9, stale8+seed9, first-run empty+stale8+seed9, same stale payload twice+seed9" + Environment.NewLine +
+                "GUI lifecycle: 10 scan + modal source-health open/close iterations, crash 0" + Environment.NewLine +
+                "retry policy: success/already/expired/invalid blocked; error retried; SeenCodes display-only");
             return 0;
         }
         catch (Exception ex)
@@ -394,6 +414,57 @@ internal static class SelfTest
 
     private static string TeamsPage(params string[] codes) =>
         $"<html><h2>Available Codes ({codes.Length})</h2>{string.Join("", codes.Select(c => $"<code>{c}</code>"))}</html>";
+
+    private static void TestTrustedSeedRegressions()
+    {
+        var now = new DateTimeOffset(2026, 8, 20, 0, 0, 0, TimeSpan.Zero);
+        var seedCodes = Enumerable.Range(1, 9).Select(i => $"SEED{i}CODE").ToArray();
+        var seed = JsonSerializer.Serialize(new
+        {
+            sources = new[] { new { source = "SW-Teams", observedAt = now.AddHours(-1), ttlHours = 48, codes = seedCodes } }
+        });
+        ScanResult Scan(string first, string second) => new CouponSourceService(
+            [new("SW-Teams", "fixture")], (_, attempt, _) => Task.FromResult(attempt == 0 ? first : second),
+            seed, () => now).ScanAsync(new AppState()).GetAwaiter().GetResult();
+
+        var fresh9Extra = TeamsPage(seedCodes.Concat(["EXTRA1CODE"]).ToArray());
+        var healthy = Scan(fresh9Extra, fresh9Extra).Health.Single();
+        Require(!healthy.Suspicious && healthy.AdvertisedCount == 10 && healthy.ReferenceCount == 10 && healthy.ProductionCount == 10,
+            "fresh9+extra1 Healthy 회귀 실패");
+
+        Require(CouponSourceService.EvaluateInventoryWarnings(9, 9, 8, 1).Any(x => x.StartsWith("parser missing 1")),
+            "advertised9/reference9/production8 suspicious 회귀 실패");
+        var advertised8Reference9 = TeamsPage(seedCodes).Replace("Available Codes (9)", "Available Codes (8)");
+        Require(Scan(advertised8Reference9, advertised8Reference9).Health.Single().Suspicious,
+            "advertised8/reference9 suspicious 회귀 실패");
+
+        var stale8 = TeamsPage(seedCodes.Take(8).ToArray());
+        var stale = Scan(stale8, stale8);
+        Require(stale.Health.Single().Suspicious && seedCodes.All(stale.Codes.Contains) && stale.Health.Single().SeedRetainedCount == 1,
+            "stale8+seed9 suspicious/union9 회귀 실패");
+        Require(stale.Health.Single().FreshnessEvidence.Contains("not independent", StringComparison.OrdinalIgnoreCase),
+            "same-origin 동일 payload freshness 과대평가 회귀 실패");
+
+        Require(CouponSourceService.EvaluateInventoryWarnings(9, 9, 8, 1).Count > 0,
+            "advertised9/reference9/production8 verdict 누락");
+    }
+
+    private static void TestSourceHealthLifecycle()
+    {
+        var service = new CouponSourceService([new("Fixture", "fixture")], (_, _, _) =>
+            Task.FromResult("<code>LIFECYCLE1</code>"));
+        for (var i = 0; i < 10; i++)
+        {
+            var scan = service.ScanAsync(new AppState()).GetAwaiter().GetResult();
+            using var dialog = MainForm.CreateSourceHealthDialog(scan.Health);
+            var list = dialog.Controls.OfType<ListBox>().Single();
+            Require(!list.IsDisposed && list.Items.Count == 1, $"source-health lifecycle 생성 실패 #{i + 1}");
+            dialog.Shown += (_, _) => dialog.BeginInvoke(dialog.Close);
+            dialog.ShowDialog();
+            dialog.Dispose();
+            Require(list.IsDisposed, $"source-health lifecycle 정리 실패 #{i + 1}");
+        }
+    }
 
     private static void Require(bool condition, string message)
     {

@@ -26,9 +26,9 @@ public sealed class MainForm : Form
     private readonly DataGridView _accounts = new();
     private readonly ListBox _codes = new();
     private readonly ListBox _results = new();
-    private readonly ListBox _sourceHealth = new();
     private readonly Label _status = new();
     private readonly Button _scan = new() { Text = "새 쿠폰 찾기" };
+    private readonly Button _showSourceHealth = new() { Text = "소스 상태", Enabled = false };
     private readonly Button _runNew = new() { Text = "새 쿠폰 받기" };
     private readonly Button _runAll = new() { Text = "모든 쿠폰 다시 확인" };
     private readonly Button _stop = new() { Text = "중지", Enabled = false };
@@ -53,6 +53,7 @@ public sealed class MainForm : Form
     private UpdateInfo? _availableUpdate;
     private CancellationTokenSource? _workCts;
     private bool _loadingAccounts;
+    private List<SourceHealth> _lastSourceHealth = [];
 
     public MainForm()
     {
@@ -175,6 +176,7 @@ public sealed class MainForm : Form
             AutoScroll = true
         };
         actions.Controls.Add(_scan);
+        actions.Controls.Add(_showSourceHealth);
         actions.Controls.Add(_runNew);
         actions.Controls.Add(_stop);
         actions.Controls.Add(_update);
@@ -227,6 +229,7 @@ public sealed class MainForm : Form
         Controls.Add(_web);
 
         _scan.Click += async (_, _) => await ScanAsync();
+        _showSourceHealth.Click += (_, _) => ShowSourceHealth(_lastSourceHealth);
         _runNew.Click += async (_, _) => await RunAsync(false);
         _runAll.Click += async (_, _) => await RunAsync(true);
         _stop.Click += (_, _) => _workCts?.Cancel();
@@ -336,7 +339,6 @@ public sealed class MainForm : Form
             var result = await _sources.ScanAsync(_state);
             var newCodes = GetNewCodes(result.Codes, seen);
             WriteScanHealth(result);
-            ShowSourceHealth(result);
 
             _state.LastScanCodes = result.Codes;
             _state.CodeSources = result.Sources;
@@ -347,6 +349,8 @@ public sealed class MainForm : Form
             _state.LastScanAt = DateTimeOffset.Now;
             _storage.Save(_state);
             LoadCodesToUi();
+            _lastSourceHealth = result.Health;
+            _showSourceHealth.Enabled = true;
 
             var newCount = newCodes.Count;
             _couponGroup.Text = newCount > 0
@@ -378,24 +382,30 @@ public sealed class MainForm : Form
                 $"[{DateTimeOffset.Now:O}] {health.Source} fetch={health.FetchSuccesses}/{health.FetchAttempts} " +
                 $"hashes=[{string.Join(",", health.PayloadHashes ?? [])}] bytes={health.PayloadBytes} production={health.ProductionCount} " +
                 $"reference={health.ReferenceCount?.ToString() ?? "unavailable"} missing={health.MissingCodes.Count} " +
-                $"advertised={health.AdvertisedCount?.ToString() ?? "n/a"} retained={health.RetainedRecentCount} suspicious={health.Suspicious} " +
+                $"advertised={health.AdvertisedCount?.ToString() ?? "n/a"} retained={health.RetainedRecentCount} seed={health.SeedRetainedCount} observed={health.ObservedRetainedCount} suspicious={health.Suspicious} " +
                 $"missingCodes=[{string.Join(",", health.MissingCodes)}] extra=[{string.Join(",", health.ExtraCodes)}] " +
-                $"error={health.Error ?? "none"}"));
+                $"freshness={health.FreshnessEvidence} reason={health.Error ?? "none"}"));
         }
         catch { }
     }
 
-    private void ShowSourceHealth(ScanResult result)
+    private void ShowSourceHealth(IReadOnlyList<SourceHealth> health)
     {
-        _sourceHealth.Items.Clear();
-        foreach (var h in result.Health)
-            _sourceHealth.Items.Add($"{h.Source} · fetch {h.FetchSuccesses}/{h.FetchAttempts} · advertised {h.AdvertisedCount?.ToString() ?? "—"} · " +
-                $"extracted {string.Join("/", h.ResponseCodeCounts ?? [])} · union {h.ProductionCount} · retained {h.RetainedRecentCount} · " +
-                (h.Suspicious ? "WARNING " + string.Join(", ", h.Warnings ?? []) : "Healthy"));
-        using var dialog = new Form { Text = "쿠폰 소스 상태", Width = 900, Height = 280, StartPosition = FormStartPosition.CenterParent };
-        _sourceHealth.Dock = DockStyle.Fill;
-        dialog.Controls.Add(_sourceHealth);
+        using var dialog = CreateSourceHealthDialog(health);
         dialog.ShowDialog(this);
+    }
+
+    internal static Form CreateSourceHealthDialog(IReadOnlyList<SourceHealth> health)
+    {
+        var list = new ListBox { Dock = DockStyle.Fill, HorizontalScrollbar = true };
+        foreach (var h in health)
+            list.Items.Add($"{h.Source} · fetch {h.FetchSuccesses}/{h.FetchAttempts} · advertised {h.AdvertisedCount?.ToString() ?? "—"} · " +
+                $"reference {h.ReferenceCount?.ToString() ?? "—"} · production {h.ProductionCount} · retained/seed {h.RetainedRecentCount}/{h.SeedRetainedCount} · " +
+                $"missing {h.MissingCodes.Count} · freshness {h.FreshnessEvidence} · " +
+                (h.Suspicious ? "WARNING " + string.Join(", ", h.Warnings ?? []) : "Healthy"));
+        var dialog = new Form { Text = "쿠폰 소스 상태", Width = 1100, Height = 300, StartPosition = FormStartPosition.CenterParent };
+        dialog.Controls.Add(list);
+        return dialog;
     }
 
     private void LoadCodesToUi()
@@ -765,6 +775,7 @@ public sealed class MainForm : Form
     private void ToggleWorking(bool busy)
     {
         _scan.Enabled = !busy;
+        _showSourceHealth.Enabled = !busy && _lastSourceHealth.Count > 0;
         _runNew.Enabled = !busy;
         _runAll.Enabled = !busy;
         _addAccount.Enabled = !busy;
