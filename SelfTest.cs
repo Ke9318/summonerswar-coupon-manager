@@ -118,6 +118,7 @@ internal static class SelfTest
             TestSourceFailureIsolation();
             TestExplicitSourcePreservation();
             TestHistoryControlsQueue();
+            TestReceiveQueueUsesExistingScan();
             TestSwgtEmptyParserDetection();
             TestCapturedSourceCompleteness();
             TestStaleResponseUnion();
@@ -128,7 +129,8 @@ internal static class SelfTest
                 "PASS" + Environment.NewLine +
                 "stale regressions: fresh9+extra1, advertised9/reference9/production8, advertised8/reference9, stale8+seed9, first-run empty+stale8+seed9, same stale payload twice+seed9" + Environment.NewLine +
                 "GUI lifecycle: 10 scan + modal source-health open/close iterations, crash 0" + Environment.NewLine +
-                "retry policy: success/already/expired/invalid blocked; error retried; SeenCodes display-only");
+                "retry policy: success/already/expired/invalid blocked; error retried; SeenCodes display-only" + Environment.NewLine +
+                "receive flow: existing scan candidates queued directly without another scan");
             return 0;
         }
         catch (Exception ex)
@@ -337,6 +339,22 @@ internal static class SelfTest
         Require(MainForm.ShouldProcess(history, accountId, "SEENBUTUNTRIED"),
             "SeenCodes와 무관한 계정별 미처리 후보 실행 실패");
         Require(MainForm.ShouldProcess(history, "account-b", "INVALID1"), "다른 계정 독립 처리 실패");
+    }
+
+    private static void TestReceiveQueueUsesExistingScan()
+    {
+        var account = new Account { Id = "receive-account", HiveId = "hive", Selected = true };
+        var history = new Dictionary<string, Dictionary<string, CouponRecord>>
+        {
+            [account.Id] = new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["DONECODE"] = new() { Status = "success" },
+                ["RETRYCODE"] = new() { Status = "error" }
+            }
+        };
+        var queue = MainForm.BuildQueue([account], ["DONECODE", "RETRYCODE", "NEWCODE"], history);
+        Require(queue.Select(x => x.Code).SequenceEqual(["RETRYCODE", "NEWCODE"]),
+            "검색된 기존 후보를 즉시 수령 큐로 넘기는 동작 실패");
     }
 
     private static void TestSwgtEmptyParserDetection()

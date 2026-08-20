@@ -453,8 +453,11 @@ public sealed class MainForm : Form
         }
 
         SaveGridToState();
-        if (!await ScanAsync())
+        if (_state.LastScanCodes.Count == 0)
+        {
+            MessageBox.Show("먼저 '새 쿠폰 찾기'로 쿠폰 후보를 검색해 주세요.");
             return;
+        }
 
         var selected = _state.Accounts.Where(a => a.Selected && a.HiveId.Length > 0).ToList();
         if (selected.Count == 0)
@@ -463,11 +466,7 @@ public sealed class MainForm : Form
             return;
         }
 
-        var queue = new List<WorkItem>();
-        foreach (var a in selected)
-        foreach (var c in _state.LastScanCodes)
-            if (!IsDone(a.Id, c))
-                queue.Add(new WorkItem(a, c));
+        var queue = BuildQueue(selected, _state.LastScanCodes, _state.History);
 
         if (queue.Count == 0)
         {
@@ -527,6 +526,15 @@ public sealed class MainForm : Form
             ToggleWorking(false);
         }
     }
+
+    internal static List<WorkItem> BuildQueue(
+        IEnumerable<Account> accounts,
+        IEnumerable<string> codes,
+        Dictionary<string, Dictionary<string, CouponRecord>> history) =>
+        accounts.SelectMany(account => codes
+            .Where(code => ShouldProcess(history, account.Id, code))
+            .Select(code => new WorkItem(account, code)))
+        .ToList();
 
     private async Task<(string status, string message)> RedeemAsync(WorkItem item, CancellationToken ct)
     {
