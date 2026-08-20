@@ -487,12 +487,19 @@ public sealed class MainForm : Form
                 _workCts.Token.ThrowIfCancellationRequested();
                 var item = queue[i];
                 SetStatus($"쿠폰 받는 중 · {i + 1} / {queue.Count} · {item.Account.Name} · {item.Code} 확인 중...");
+                _results.Items.Insert(0, FormatRedemptionProgress(item, "등록 대기"));
+                void Progress(string stage)
+                {
+                    _results.Items[0] = FormatRedemptionProgress(item, stage);
+                    WriteRedemptionProgress(item, stage);
+                }
+                Progress($"페이지 준비 · 서버 {ServerDisplayName(item.Account.Server)}");
 
                 string status;
                 string message;
                 try
                 {
-                    (status, message) = await RedeemAsync(item, _workCts.Token);
+                    (status, message) = await RedeemAsync(item, Progress, _workCts.Token);
                 }
                 catch (OperationCanceledException) when (_workCts.IsCancellationRequested)
                 {
@@ -505,7 +512,7 @@ public sealed class MainForm : Form
                 }
                 Record(item, status, message);
 
-                _results.Items.Insert(0, $"{item.Account.Name} · {item.Code} · {DisplayStatus(status)}");
+                Progress($"{DisplayStatus(status)} · {message}");
                 _storage.Save(_state);
             }
 
@@ -536,7 +543,8 @@ public sealed class MainForm : Form
             .Select(code => new WorkItem(account, code)))
         .ToList();
 
-    private async Task<(string status, string message)> RedeemAsync(WorkItem item, CancellationToken ct)
+    private async Task<(string status, string message)> RedeemAsync(
+        WorkItem item, Action<string> progress, CancellationToken ct)
     {
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -561,6 +569,7 @@ public sealed class MainForm : Form
                 return ("error", "공식 쿠폰 페이지를 제한 시간 안에 열지 못했습니다.");
             }
             if (!ok) throw new InvalidOperationException("공식 쿠폰 페이지를 열지 못했습니다.");
+            progress("공식 쿠폰 페이지 열림");
         }
         finally
         {
@@ -632,14 +641,15 @@ public sealed class MainForm : Form
 
           setValue(hive, {{accountJson}});
           setValue(coupon, {{codeJson}});
-          setTimeout(() => btn.click(), 400);
-          return JSON.stringify({ok:true});
+          btn.click();
+          return JSON.stringify({ok:true,server:sel.value,submitted:true});
         })();
         """;
 
         var fillResult = UnwrapJsString(await _web.ExecuteScriptAsync(fillScript));
         if (!fillResult.Contains("\"ok\":true", StringComparison.OrdinalIgnoreCase))
             return ("error", fillResult);
+        progress($"서버 {ServerDisplayName(item.Account.Server)} 선택 · 사용 요청 전송");
 
         var confirmationClicked = false;
         for (var i = 0; i < 120; i++)
@@ -690,6 +700,7 @@ public sealed class MainForm : Form
                 if (!string.Equals(clicked, "true", StringComparison.OrdinalIgnoreCase))
                     return ("error", "쿠폰 사용 확인 버튼을 누르지 못했습니다.");
                 confirmationClicked = true;
+                progress("계정/쿠폰 확인 완료 · 최종 사용 요청 전송");
                 continue;
             }
 
@@ -703,6 +714,26 @@ public sealed class MainForm : Form
         return ("error", confirmationClicked
             ? "쿠폰 사용 요청 후 결과를 제한 시간 안에 받지 못했습니다."
             : "쿠폰 확인 결과를 제한 시간 안에 받지 못했습니다.");
+    }
+
+    internal static string FormatRedemptionProgress(WorkItem item, string stage) =>
+        $"{item.Account.Name} · {item.Code} · {stage}";
+
+    internal static string ServerDisplayName(string? server)
+    {
+        var normalized = NormalizeServer(server);
+        return ServerChoices.First(choice => choice.Value == normalized).DisplayName + $" ({normalized})";
+    }
+
+    private void WriteRedemptionProgress(WorkItem item, string stage)
+    {
+        try
+        {
+            Directory.CreateDirectory(_storage.DataDir);
+            File.AppendAllText(Path.Combine(_storage.DataDir, "redemption.log"),
+                $"[{DateTimeOffset.Now:O}] account={item.Account.Name} code={item.Code} server={NormalizeServer(item.Account.Server)} stage={stage}{Environment.NewLine}");
+        }
+        catch { }
     }
 
     private void Record(WorkItem item, string status, string message)

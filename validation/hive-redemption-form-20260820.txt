@@ -1,0 +1,21 @@
+Inspected: 2026-08-20
+URL: https://event.withhive.com/ci/smon/evt_coupon
+
+Live server option values:
+  global = 글로벌 서버
+  korea = 한국 서버
+  japan = 일본 서버
+  china = 중국 서버
+  asia = 아시아 서버
+  europe = 유럽 서버
+
+Live form flow:
+  #EVTselect + #EVTid + #EVTcode
+  button.btn_use -> checkUser AJAX
+  #EVTpop_coupon / #EVTbtn_1 -> useCoupon AJAX
+  #EVTpop_1 -> final result message
+
+Conclusion:
+  Application server identifiers match the live page. The prior application exposed no
+  result row until RedeemAsync completed and delegated the first submit click to a delayed
+  page timer. v1.4.4 writes every stage immediately and clicks the submit button directly.
