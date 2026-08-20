@@ -1,0 +1,14 @@
+Release candidate: 1.4.6
+
+Primary button order:
+  찾기 -> 받기 -> 다시시도
+
+Behavior:
+  찾기: scan live coupon sources only
+  받기: queue detected codes with no final record or error record
+  다시시도: queue every detected code for every selected account, including
+            success/already/expired/invalid records
+
+Regression:
+  Two accounts x five codes covering success/already/expired/invalid/new produced
+  all ten account+code work items in retry-all mode.

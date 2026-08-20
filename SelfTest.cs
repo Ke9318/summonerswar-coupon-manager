@@ -119,6 +119,7 @@ internal static class SelfTest
             TestExplicitSourcePreservation();
             TestHistoryControlsQueue();
             TestReceiveQueueUsesExistingScan();
+            TestRetryAllQueueIncludesCompletedCodes();
             TestRedemptionProgressAndServer();
             TestSwgtEmptyParserDetection();
             TestCapturedSourceCompleteness();
@@ -132,6 +133,7 @@ internal static class SelfTest
                 "GUI lifecycle: 10 scan + modal source-health open/close iterations, crash 0" + Environment.NewLine +
                 "retry policy: success/already/expired/invalid blocked; error retried; SeenCodes display-only" + Environment.NewLine +
                 "receive flow: existing scan candidates queued directly without another scan" + Environment.NewLine +
+                "retry-all flow: every detected account+code pair queued regardless of final history" + Environment.NewLine +
                 "redemption diagnostics: actual Hive server values and immediate progress log formatting verified");
             return 0;
         }
@@ -357,6 +359,30 @@ internal static class SelfTest
         var queue = MainForm.BuildQueue([account], ["DONECODE", "RETRYCODE", "NEWCODE"], history);
         Require(queue.Select(x => x.Code).SequenceEqual(["RETRYCODE", "NEWCODE"]),
             "검색된 기존 후보를 즉시 수령 큐로 넘기는 동작 실패");
+    }
+
+    private static void TestRetryAllQueueIncludesCompletedCodes()
+    {
+        var accounts = new[]
+        {
+            new Account { Id = "retry-a", HiveId = "a", Selected = true },
+            new Account { Id = "retry-b", HiveId = "b", Selected = true }
+        };
+        var history = new Dictionary<string, Dictionary<string, CouponRecord>>
+        {
+            ["retry-a"] = new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["SUCCESS1"] = new() { Status = "success" },
+                ["ALREADY1"] = new() { Status = "already" },
+                ["EXPIRED1"] = new() { Status = "expired" },
+                ["INVALID1"] = new() { Status = "invalid" }
+            }
+        };
+        var codes = new[] { "SUCCESS1", "ALREADY1", "EXPIRED1", "INVALID1", "NEWCODE" };
+        var queue = MainForm.BuildQueue(accounts, codes, history, retryAll: true);
+        Require(queue.Count == accounts.Length * codes.Length, "다시시도가 모든 account+code 조합을 포함하지 않음");
+        Require(codes.All(code => queue.Any(item => item.Account.Id == "retry-a" && item.Code == code)),
+            "다시시도가 완료 판정 코드를 제외함");
     }
 
     private static void TestRedemptionProgressAndServer()

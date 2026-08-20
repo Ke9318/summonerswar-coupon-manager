@@ -27,10 +27,10 @@ public sealed class MainForm : Form
     private readonly ListBox _codes = new();
     private readonly ListBox _results = new();
     private readonly Label _status = new();
-    private readonly Button _scan = new() { Text = "새 쿠폰 찾기" };
+    private readonly Button _scan = new() { Text = "찾기" };
     private readonly Button _showSourceHealth = new() { Text = "소스 상태", Enabled = false };
-    private readonly Button _runNew = new() { Text = "새 쿠폰 받기" };
-    private readonly Button _runAll = new() { Text = "모든 쿠폰 다시 확인" };
+    private readonly Button _runNew = new() { Text = "받기" };
+    private readonly Button _runAll = new() { Text = "다시시도" };
     private readonly Button _stop = new() { Text = "중지", Enabled = false };
     private readonly Button _addAccount = new() { Text = "+ 계정 추가" };
     private readonly Button _deleteAccount = new() { Text = "선택 삭제" };
@@ -164,10 +164,13 @@ public sealed class MainForm : Form
 
         _scan.AutoSize = true;
         _runNew.AutoSize = true;
+        _runAll.AutoSize = true;
         _scan.Font = new Font(Font, FontStyle.Bold);
         _runNew.Font = new Font(Font, FontStyle.Bold);
+        _runAll.Font = new Font(Font, FontStyle.Bold);
         _scan.Padding = new Padding(10, 5, 10, 5);
         _runNew.Padding = new Padding(10, 5, 10, 5);
+        _runAll.Padding = new Padding(10, 5, 10, 5);
         var actions = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
@@ -176,8 +179,9 @@ public sealed class MainForm : Form
             AutoScroll = true
         };
         actions.Controls.Add(_scan);
-        actions.Controls.Add(_showSourceHealth);
         actions.Controls.Add(_runNew);
+        actions.Controls.Add(_runAll);
+        actions.Controls.Add(_showSourceHealth);
         actions.Controls.Add(_stop);
         actions.Controls.Add(_update);
         root.Controls.Add(actions, 0, 2);
@@ -202,7 +206,6 @@ public sealed class MainForm : Form
 
         _advanced.Controls.Add(_addAccount);
         _advanced.Controls.Add(_deleteAccount);
-        _advanced.Controls.Add(_runAll);
         var secondary = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
         secondary.Controls.Add(_history);
         secondary.Controls.Add(_settings);
@@ -444,7 +447,7 @@ public sealed class MainForm : Form
         return ServerChoices.Any(choice => choice.Value == value) ? value : "korea";
     }
 
-    private async Task RunAsync(bool _)
+    private async Task RunAsync(bool retryAll)
     {
         if (_workCts is not null)
         {
@@ -466,7 +469,7 @@ public sealed class MainForm : Form
             return;
         }
 
-        var queue = BuildQueue(selected, _state.LastScanCodes, _state.History);
+        var queue = BuildQueue(selected, _state.LastScanCodes, _state.History, retryAll);
 
         if (queue.Count == 0)
         {
@@ -482,6 +485,9 @@ public sealed class MainForm : Form
         _workCts = new CancellationTokenSource();
         ToggleWorking(true);
         _results.Items.Clear();
+        var modeName = retryAll ? "모든 쿠폰 다시시도" : "미처리 쿠폰 받기";
+        _results.Items.Add($"{modeName} · 선택 계정 {selected.Count}개 · 처리 큐 {queue.Count}개");
+        WriteRedemptionSystemLog($"mode={modeName} accounts={selected.Count} queue={queue.Count}");
 
         try
         {
@@ -521,7 +527,7 @@ public sealed class MainForm : Form
                 _storage.Save(_state);
             }
 
-            SetStatus($"완료 · 쿠폰 후보 {queue.Count}개 처리");
+            SetStatus($"완료 · {modeName} {queue.Count}개 처리");
         }
         catch (OperationCanceledException)
         {
@@ -542,9 +548,10 @@ public sealed class MainForm : Form
     internal static List<WorkItem> BuildQueue(
         IEnumerable<Account> accounts,
         IEnumerable<string> codes,
-        Dictionary<string, Dictionary<string, CouponRecord>> history) =>
+        Dictionary<string, Dictionary<string, CouponRecord>> history,
+        bool retryAll = false) =>
         accounts.SelectMany(account => codes
-            .Where(code => ShouldProcess(history, account.Id, code))
+            .Where(code => retryAll || ShouldProcess(history, account.Id, code))
             .Select(code => new WorkItem(account, code)))
         .ToList();
 
