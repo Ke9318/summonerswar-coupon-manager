@@ -1,0 +1,17 @@
+Release candidate: 1.4.5
+
+Observed user state:
+  running version: 1.4.4
+  selected accounts with Hive ID: 2
+  server: korea for both accounts
+  current scan candidates: 24
+  pending/error candidates in current scan: 0 for both accounts
+  redemption.log before click diagnosis: absent
+
+Root cause:
+  The button reached the empty-queue branch before WebView/server submission. That branch
+  updated only the small footer status, making the click appear to have no response.
+
+Fix:
+  Empty queue now produces a modal explanation, a result-list entry, and redemption.log.
+  Completed success/already/expired/invalid records remain non-retryable.

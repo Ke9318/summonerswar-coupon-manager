@@ -373,6 +373,8 @@ internal static class SelfTest
         var item = new WorkItem(new Account { Name = "테스트", Server = "korea" }, "TESTCODE");
         Require(MainForm.FormatRedemptionProgress(item, "사용 요청 전송").Contains("사용 요청 전송"),
             "등록 진행 로그 표시 실패");
+        Require(MainForm.BuildNoWorkMessage(2, 24).Contains("선택 계정 2개 · 검색 후보 24개 · 미처리/오류 0개"),
+            "수령 큐 0개 안내 실패");
     }
 
     private static void TestSwgtEmptyParserDetection()

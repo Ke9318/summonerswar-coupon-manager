@@ -470,7 +470,12 @@ public sealed class MainForm : Form
 
         if (queue.Count == 0)
         {
-            SetStatus("새로 처리할 쿠폰이 없습니다.");
+            var message = BuildNoWorkMessage(selected.Count, _state.LastScanCodes.Count);
+            SetStatus(message);
+            _results.Items.Insert(0, message);
+            WriteRedemptionSystemLog(message);
+            MessageBox.Show(message + "\r\n\r\nsuccess/already/expired/invalid 기록은 안전을 위해 다시 등록하지 않습니다.",
+                "쿠폰 받기", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
@@ -719,6 +724,9 @@ public sealed class MainForm : Form
     internal static string FormatRedemptionProgress(WorkItem item, string stage) =>
         $"{item.Account.Name} · {item.Code} · {stage}";
 
+    internal static string BuildNoWorkMessage(int selectedAccounts, int scannedCodes) =>
+        $"처리할 쿠폰이 없습니다. 선택 계정 {selectedAccounts}개 · 검색 후보 {scannedCodes}개 · 미처리/오류 0개";
+
     internal static string ServerDisplayName(string? server)
     {
         var normalized = NormalizeServer(server);
@@ -732,6 +740,17 @@ public sealed class MainForm : Form
             Directory.CreateDirectory(_storage.DataDir);
             File.AppendAllText(Path.Combine(_storage.DataDir, "redemption.log"),
                 $"[{DateTimeOffset.Now:O}] account={item.Account.Name} code={item.Code} server={NormalizeServer(item.Account.Server)} stage={stage}{Environment.NewLine}");
+        }
+        catch { }
+    }
+
+    private void WriteRedemptionSystemLog(string message)
+    {
+        try
+        {
+            Directory.CreateDirectory(_storage.DataDir);
+            File.AppendAllText(Path.Combine(_storage.DataDir, "redemption.log"),
+                $"[{DateTimeOffset.Now:O}] {message}{Environment.NewLine}");
         }
         catch { }
     }
