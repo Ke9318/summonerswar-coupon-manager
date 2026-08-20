@@ -1,0 +1,9 @@
+Release candidate: 1.4.3
+Verified at: 2026-08-20T01:45:47.9225569Z
+
+Build/publish: PASS (0 warnings, 0 errors)
+Self-test: PASS
+Receive flow: PASS, existing scan candidates queued directly without another scan
+Retry policy: PASS, completed verdicts excluded; error and untried candidates queued
+GUI lifecycle and stale regressions: PASS
+Live source gate: PASS
