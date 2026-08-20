@@ -119,6 +119,7 @@ internal static class SelfTest
             TestExplicitSourcePreservation();
             TestHistoryControlsQueue();
             TestReceiveQueueUsesExistingScan();
+            TestRedemptionProgressAndServer();
             TestSwgtEmptyParserDetection();
             TestCapturedSourceCompleteness();
             TestStaleResponseUnion();
@@ -130,7 +131,8 @@ internal static class SelfTest
                 "stale regressions: fresh9+extra1, advertised9/reference9/production8, advertised8/reference9, stale8+seed9, first-run empty+stale8+seed9, same stale payload twice+seed9" + Environment.NewLine +
                 "GUI lifecycle: 10 scan + modal source-health open/close iterations, crash 0" + Environment.NewLine +
                 "retry policy: success/already/expired/invalid blocked; error retried; SeenCodes display-only" + Environment.NewLine +
-                "receive flow: existing scan candidates queued directly without another scan");
+                "receive flow: existing scan candidates queued directly without another scan" + Environment.NewLine +
+                "redemption diagnostics: actual Hive server values and immediate progress log formatting verified");
             return 0;
         }
         catch (Exception ex)
@@ -355,6 +357,22 @@ internal static class SelfTest
         var queue = MainForm.BuildQueue([account], ["DONECODE", "RETRYCODE", "NEWCODE"], history);
         Require(queue.Select(x => x.Code).SequenceEqual(["RETRYCODE", "NEWCODE"]),
             "검색된 기존 후보를 즉시 수령 큐로 넘기는 동작 실패");
+    }
+
+    private static void TestRedemptionProgressAndServer()
+    {
+        var expected = new Dictionary<string, string>
+        {
+            ["global"] = "글로벌 서버 (global)", ["korea"] = "한국 서버 (korea)",
+            ["japan"] = "일본 서버 (japan)", ["china"] = "중국 서버 (china)",
+            ["asia"] = "아시아 서버 (asia)", ["europe"] = "유럽 서버 (europe)"
+        };
+        foreach (var pair in expected)
+            Require(MainForm.ServerDisplayName(pair.Key) == pair.Value, $"Hive 서버 매핑 실패: {pair.Key}");
+
+        var item = new WorkItem(new Account { Name = "테스트", Server = "korea" }, "TESTCODE");
+        Require(MainForm.FormatRedemptionProgress(item, "사용 요청 전송").Contains("사용 요청 전송"),
+            "등록 진행 로그 표시 실패");
     }
 
     private static void TestSwgtEmptyParserDetection()

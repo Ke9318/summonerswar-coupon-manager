@@ -1,0 +1,8 @@
+Release candidate: 1.4.4
+
+Build: PASS (0 warnings, 0 errors)
+Self-test: PASS
+Hive live form structure: inspected without transmitting account data
+Server mapping: PASS for global/korea/japan/china/asia/europe
+Redemption diagnostics: immediate UI row plus persistent redemption.log stages
+Submit behavior: direct btn.click(), no delayed timer
