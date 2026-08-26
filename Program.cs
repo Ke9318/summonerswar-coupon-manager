@@ -11,12 +11,29 @@ internal static class Program
             return SelfTest.RunLiveScan();
         if (args.Contains("--audit-history", StringComparer.OrdinalIgnoreCase))
             return HistoryAudit.Run(args);
+        if (args.Contains("--update-health-check", StringComparer.OrdinalIgnoreCase))
+            return UpdateHealthCheck.Run(args);
+        if (args.Contains("--build-manifest", StringComparer.OrdinalIgnoreCase))
+            return CloudWatcher.RunAsync(args).GetAwaiter().GetResult();
+        if (args.Contains("--anomaly-evidence", StringComparer.OrdinalIgnoreCase))
+            return AnomalyEvidenceService.RunAsync(args).GetAwaiter().GetResult();
 
         try
         {
             ApplicationConfiguration.Initialize();
             if (!RuntimePrerequisiteChecker.EnsureAvailable())
                 return 2;
+
+            using var instanceLease = SingleInstanceLease.TryAcquire("Local\\SWCouponManager");
+            if (instanceLease is null)
+            {
+                MessageBox.Show(
+                    "SWCouponManager가 이미 실행 중입니다. 알림 영역이나 열린 창을 확인해 주세요.",
+                    "SWCouponManager",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return 0;
+            }
 
             Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
             Application.ThreadException += (_, e) => CrashReporter.Report(e.Exception);

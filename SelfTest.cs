@@ -120,6 +120,21 @@ internal static class SelfTest
             TestHistoryControlsQueue();
             TestReceiveQueueUsesExistingScan();
             TestRetryAllQueueIncludesCompletedCodes();
+            TestUnattendedQueueNeverRetriesTerminalHistory();
+            TestAttemptJournalLifecycle();
+            TestRedemptionAttemptPersistence();
+            TestBackgroundAgentScheduler();
+            TestBackgroundAgentLifecycle();
+            TestTrayOwnerLifecycle();
+            TestLoginStartRegistration();
+            TestTrustedCandidateManifest();
+            TestTrustedAutomaticPlanner();
+            TestTrustedAutomaticCycle();
+            TestTrustedManifestInbox();
+            TestCloudWatcherPublication();
+            TestDisposableUpdateTransaction();
+            TestDisposableUnattendedEndToEnd();
+            TestAnomalyEvidenceAndRepairGate();
             TestRedemptionProgressAndServer();
             TestSwgtEmptyParserDetection();
             TestCapturedSourceCompleteness();
@@ -127,6 +142,7 @@ internal static class SelfTest
             TestObservedInventoryGrace();
             TestTrustedSeedRegressions();
             TestSourceHealthLifecycle();
+            TestUpdateChecksum();
             File.WriteAllText(Path.Combine(Path.GetTempPath(), "SWCouponManager-self-test.log"),
                 "PASS" + Environment.NewLine +
                 "stale regressions: fresh9+extra1, advertised9/reference9/production8, advertised8/reference9, stale8+seed9, first-run empty+stale8+seed9, same stale payload twice+seed9" + Environment.NewLine +
@@ -134,6 +150,8 @@ internal static class SelfTest
                 "retry policy: success/already/expired/invalid blocked; error retried; SeenCodes display-only" + Environment.NewLine +
                 "receive flow: existing scan candidates queued directly without another scan" + Environment.NewLine +
                 "retry-all flow: every detected account+code pair queued regardless of final history" + Environment.NewLine +
+                "unattended foundation: terminal suppression, attempt lifecycle, ambiguity quarantine, manifest integrity/privacy" + Environment.NewLine +
+                "background-agent foundation: trusted publish/inbox/restart end-to-end, automatic planning/cycle isolation, single-instance lease, bounded catch-up, non-overlap, pause/resume, cancellation, failure backoff, tray create/dispose and close policy, login-start specification" + Environment.NewLine +
                 "redemption diagnostics: actual Hive server values and immediate progress log formatting verified");
             return 0;
         }
@@ -145,6 +163,27 @@ internal static class SelfTest
         finally
         {
             try { Directory.Delete(root, true); } catch { }
+        }
+    }
+
+    private static void TestUpdateChecksum()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "SWCouponManager-checksum-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            File.WriteAllText(path, "synthetic update payload");
+            using var stream = File.OpenRead(path);
+            var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(stream));
+            GitHubUpdateService.VerifySha256(path, hash + "  SWCouponManager-win-x64.zip");
+
+            var rejected = false;
+            try { GitHubUpdateService.VerifySha256(path, new string('0', 64)); }
+            catch (InvalidDataException) { rejected = true; }
+            Require(rejected, "불일치 업데이트 체크섬을 거부하지 않음");
+        }
+        finally
+        {
+            try { File.Delete(path); } catch { }
         }
     }
 
@@ -207,7 +246,7 @@ internal static class SelfTest
         Require(MainForm.Classify("만료된 쿠폰입니다.") == "expired", "만료 결과 분류 실패");
         Require(MainForm.Classify("유효한 쿠폰 코드가 아닙니다. 다시 확인해 주세요.") == "invalid", "Hive 무효 결과 분류 실패");
         Require(MainForm.Classify("일시적인 오류가 발생했습니다.") == "error", "오류 결과 분류 실패");
-        Require(MainForm.Classify("예상하지 못한 새 응답 문구") == "error", "미분류 Hive 응답 재시도 보존 실패");
+        Require(MainForm.Classify("예상하지 못한 새 응답 문구") == "ambiguous", "미분류 Hive 응답 격리 실패");
     }
 
     private static void TestRetryPolicy()
@@ -216,6 +255,7 @@ internal static class SelfTest
             Require(MainForm.IsCompletedStatus(status), $"완료 상태 재시도 차단 실패: {status}");
 
         Require(!MainForm.IsCompletedStatus("error"), "오류 상태가 재시도 불가로 저장됨");
+        Require(MainForm.IsAutomaticBlockedStatus("ambiguous"), "모호한 결과 자동 재시도 차단 실패");
         Require(!MainForm.IsCompletedStatus(null), "기록 없는 후보가 재시도 불가로 저장됨");
     }
 
@@ -383,6 +423,657 @@ internal static class SelfTest
         Require(queue.Count == accounts.Length * codes.Length, "다시시도가 모든 account+code 조합을 포함하지 않음");
         Require(codes.All(code => queue.Any(item => item.Account.Id == "retry-a" && item.Code == code)),
             "다시시도가 완료 판정 코드를 제외함");
+    }
+
+    private static void TestUnattendedQueueNeverRetriesTerminalHistory()
+    {
+        var account = new Account { Id = "auto-a", HiveId = "synthetic", Selected = true };
+        var history = new Dictionary<string, Dictionary<string, CouponRecord>>
+        {
+            [account.Id] = new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["DONE1"] = new() { Status = "success" },
+                ["DONE2"] = new() { Status = "already" }
+            }
+        };
+        var automatic = MainForm.BuildQueue([account], ["DONE1", "DONE2", "NEW1"], history);
+        Require(automatic.Count == 1 && automatic[0].Code == "NEW1",
+            "자동 큐가 수동 retryAll처럼 terminal history를 포함함");
+    }
+
+    private static void TestAttemptJournalLifecycle()
+    {
+        var now = new DateTimeOffset(2026, 8, 26, 0, 0, 0, TimeSpan.Zero);
+        var state = new AppState();
+        var history = new Dictionary<string, Dictionary<string, CouponRecord>>();
+        var journal = new AttemptJournal(state, () => now);
+
+        Require(journal.CanQueue("a", " code 1 ", history), "신규 attempt queue 차단");
+        var queued = journal.Queue("a", " code 1 ", "corr-1");
+        Require(queued.CorrelationId == "corr-1" && state.Attempts["a"].ContainsKey("CODE1"),
+            "attempt identity/정규화 저장 실패");
+        Require(!journal.CanQueue("a", "CODE1", history), "queued attempt 중복 허용");
+        journal.MarkExecuting("a", "CODE1");
+        journal.MarkVerifying("a", "CODE1");
+        journal.MarkAmbiguous("a", "CODE1");
+        Require(!journal.CanQueue("a", "CODE1", history), "ambiguous attempt 자동 재전송 허용");
+
+        journal.Queue("b", "TEMP1");
+        journal.MarkExecuting("b", "TEMP1");
+        journal.MarkTemporaryFailure("b", "TEMP1", TimeSpan.FromMinutes(5));
+        Require(!journal.CanQueue("b", "TEMP1", history), "backoff 이전 temporary retry 허용");
+        now = now.AddMinutes(5);
+        Require(journal.CanQueue("b", "TEMP1", history), "backoff 이후 temporary retry 차단");
+        for (var failure = 2; failure <= 3; failure++)
+        {
+            journal.Queue("b", "TEMP1");
+            journal.MarkExecuting("b", "TEMP1");
+            journal.MarkTemporaryFailure("b", "TEMP1", TimeSpan.FromMinutes(5));
+            now = now.AddMinutes(5 * (1 << (failure - 1)));
+        }
+        Require(state.Attempts["b"]["TEMP1"].TemporaryFailures == 3 &&
+                !journal.CanQueue("b", "TEMP1", history),
+            "temporary retry 상한이 재큐잉 사이에 보존되지 않음");
+
+        Require(journal.CanQueue("other-account", "CODE1", history),
+            "한 계정의 attempt가 다른 계정의 동일 쿠폰을 차단함");
+
+        journal.Queue("c", "DONE1");
+        journal.MarkExecuting("c", "DONE1");
+        journal.MarkTerminal("c", "DONE1", "success");
+        Require(!journal.CanQueue("c", "DONE1", history), "terminal attempt 재실행 허용");
+
+        var root = Path.Combine(Path.GetTempPath(), "SWCouponManagerAttemptTest", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var storage = new AppStorage(root);
+            storage.Save(state);
+            var restored = storage.Load();
+            Require(restored.Attempts["a"]["CODE1"].Status == AttemptStatus.Ambiguous,
+                "restart 후 ambiguous attempt 복원 실패");
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
+    }
+
+    private static void TestTrustedCandidateManifest()
+    {
+        var now = new DateTimeOffset(2026, 8, 26, 0, 0, 0, TimeSpan.Zero);
+        var evidence = new string('a', 64);
+        var json = $$"""
+        {
+          "schemaVersion": 1,
+          "generatedAt": "{{now:O}}",
+          "expiresAt": "{{now.AddHours(6):O}}",
+          "minimumClientVersion": "1.5.0",
+          "candidates": [{
+            "code": " code 1 ",
+            "sources": ["SWGT", "Official", "SWGT"],
+            "firstObservedAt": "{{now.AddMinutes(-5):O}}",
+            "lastObservedAt": "{{now:O}}",
+            "evidenceHashes": ["{{evidence}}"],
+            "policyId": "recall-explicit-v1"
+          }]
+        }
+        """;
+        var hash = TrustedCandidateManifestService.ComputeSha256(json);
+        var manifest = TrustedCandidateManifestService.ParseAndValidate(json, hash, new Version(1, 5, 0), now);
+        Require(manifest.Candidates.Single().Code == "CODE1", "manifest coupon 정규화 실패");
+        Require(manifest.Candidates.Single().Sources.SequenceEqual(["Official", "SWGT"]),
+            "manifest source attribution 정규화 실패");
+
+        var rejectedHash = false;
+        try { TrustedCandidateManifestService.ParseAndValidate(json, new string('0', 64), new Version(1, 4, 6), now); }
+        catch (InvalidDataException) { rejectedHash = true; }
+        Require(rejectedHash, "손상 manifest checksum 허용");
+
+        var privateJson = json.Replace("\"candidates\":", "\"accountId\":\"forbidden\",\"candidates\":");
+        var rejectedPrivate = false;
+        try { TrustedCandidateManifestService.ParseAndValidate(privateJson,
+            TrustedCandidateManifestService.ComputeSha256(privateJson), new Version(1, 5, 0), now); }
+        catch (InvalidDataException) { rejectedPrivate = true; }
+        Require(rejectedPrivate, "cloud manifest account field 허용");
+    }
+
+    private static void TestBackgroundAgentScheduler()
+    {
+        var now = new DateTimeOffset(2026, 8, 26, 0, 0, 0, TimeSpan.Zero);
+        var runs = 0;
+        var active = 0;
+        var maxActive = 0;
+        BackgroundAgentScheduler? scheduler = null;
+        async Task FakeDelay(TimeSpan delay, CancellationToken ct)
+        {
+            now += delay;
+            ct.ThrowIfCancellationRequested();
+            await Task.Yield();
+        }
+        scheduler = new BackgroundAgentScheduler(async ct =>
+        {
+            active++;
+            maxActive = Math.Max(maxActive, active);
+            runs++;
+            await Task.Yield();
+            active--;
+            if (runs == 2) scheduler!.Pause();
+        }, now.AddHours(-24), TimeSpan.FromMinutes(15), TimeSpan.FromMinutes(1), () => now, FakeDelay);
+
+        var initialLastCompleted = scheduler.LastCompletedAt;
+        Require(scheduler.Start(), "background scheduler 첫 start 실패");
+        Require(!scheduler.Start(), "background scheduler 중복 start 허용");
+        SpinWait.SpinUntil(() => scheduler.IsPaused && scheduler.LastCompletedAt > initialLastCompleted,
+            TimeSpan.FromSeconds(2));
+        Require(runs == 2 && maxActive == 1, "catch-up이 burst 실행되거나 작업이 겹침");
+        Require(scheduler.LastCompletedAt > initialLastCompleted, "scheduler 완료 시각이 저장되지 않음");
+        scheduler.Resume();
+        SpinWait.SpinUntil(() => runs >= 3, TimeSpan.FromSeconds(2));
+        scheduler.StopAsync().GetAwaiter().GetResult();
+        Require(!scheduler.IsRunning, "scheduler cancellation 후 loop가 남음");
+        scheduler.DisposeAsync().AsTask().GetAwaiter().GetResult();
+
+        var failures = 0;
+        var delays = new List<TimeSpan>();
+        BackgroundAgentScheduler? failing = null;
+        failing = new BackgroundAgentScheduler(ct =>
+        {
+            failures++;
+            if (failures == 3) failing!.Pause();
+            throw new InvalidOperationException("synthetic scheduler failure");
+        }, null, TimeSpan.FromMinutes(15), TimeSpan.FromMinutes(1), () => now,
+        async (delay, ct) =>
+        {
+            delays.Add(delay);
+            now += delay;
+            ct.ThrowIfCancellationRequested();
+            await Task.Yield();
+        });
+        failing.Start();
+        SpinWait.SpinUntil(() => failing.IsPaused, TimeSpan.FromSeconds(2));
+        failing.StopAsync().GetAwaiter().GetResult();
+        Require(delays.Take(3).SequenceEqual(new[]
+            { TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(2), TimeSpan.FromMinutes(4) }),
+            "scheduler failure backoff가 bounded exponential 순서를 따르지 않음");
+        failing.DisposeAsync().AsTask().GetAwaiter().GetResult();
+    }
+
+    private static void TestTrustedAutomaticPlanner()
+    {
+        var now = new DateTimeOffset(2026, 8, 26, 0, 0, 0, TimeSpan.Zero);
+        var eligible = new Account { Id = "eligible", HiveId = "synthetic", Server = "global", Selected = true };
+        var duplicate1 = new Account { Id = "duplicate", HiveId = "synthetic-1", Server = "korea", Selected = true };
+        var duplicate2 = new Account { Id = "duplicate", HiveId = "synthetic-2", Server = "europe", Selected = true };
+        var state = new AppState
+        {
+            Accounts =
+            [
+                eligible,
+                new Account { Id = "not-selected", HiveId = "synthetic", Server = "korea", Selected = false },
+                new Account { Id = "bad-server", HiveId = "synthetic", Server = "unknown", Selected = true },
+                duplicate1,
+                duplicate2
+            ]
+        };
+        state.History[eligible.Id] = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["DONE1"] = new() { Status = "success" }
+        };
+        var journal = new AttemptJournal(state, () => now);
+        journal.Queue(eligible.Id, "AMBIG1");
+        journal.MarkExecuting(eligible.Id, "AMBIG1");
+        journal.MarkAmbiguous(eligible.Id, "AMBIG1");
+        journal.Queue(eligible.Id, "BACKOFF1");
+        journal.MarkExecuting(eligible.Id, "BACKOFF1");
+        journal.MarkTemporaryFailure(eligible.Id, "BACKOFF1", TimeSpan.FromMinutes(5));
+
+        TrustedCandidate Candidate(string code) => new()
+        {
+            Code = code,
+            Sources = ["Synthetic Source"],
+            EvidenceHashes = [new string('a', 64)],
+            FirstObservedAt = now.AddMinutes(-1),
+            LastObservedAt = now
+        };
+        var manifest = new TrustedCandidateManifest
+        {
+            GeneratedAt = now,
+            ExpiresAt = now.AddHours(1),
+            Candidates = [Candidate("NEW1"), Candidate("DONE1"), Candidate("AMBIG1"), Candidate("BACKOFF1")]
+        };
+
+        var plan = new TrustedAutomaticPlanner(state, () => now).Build(manifest);
+        Require(plan.Items.Count == 1 && plan.Items[0].Account.Id == eligible.Id &&
+                plan.Items[0].Candidate.Code == "NEW1",
+            "trusted automatic planner가 terminal/ambiguous/backoff 또는 부적격 계정을 포함함");
+        Require(plan.Items[0].Candidate.Sources.SequenceEqual(["Synthetic Source"]),
+            "automatic work item에서 manifest attribution 손실");
+        Require(plan.SkippedAccounts == 4 && plan.SkippedCandidates == 3,
+            "automatic planner의 비식별 skip 집계 실패");
+
+        var rejected = false;
+        try
+        {
+            new TrustedAutomaticPlanner(new AppState()).Build(new TrustedCandidateManifest
+            {
+                Candidates = [Candidate(" not-normalized ")]
+            });
+        }
+        catch (InvalidDataException) { rejected = true; }
+        Require(rejected, "planner가 미검증 candidate를 허용함");
+    }
+
+    private static void TestTrustedAutomaticCycle()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "SWCouponManagerAutomaticCycleTest", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var now = new DateTimeOffset(2026, 8, 26, 0, 0, 0, TimeSpan.Zero);
+            var account = new Account { Id = "automatic", HiveId = "synthetic", Server = "asia", Selected = true };
+            var state = new AppState { Accounts = [account] };
+            var storage = new AppStorage(root);
+            TrustedCandidate Candidate(string code) => new()
+            {
+                Code = code,
+                Sources = ["Synthetic Source"],
+                EvidenceHashes = [new string('b', 64)],
+                FirstObservedAt = now.AddMinutes(-1),
+                LastObservedAt = now
+            };
+            var manifest = new TrustedCandidateManifest
+            {
+                GeneratedAt = now,
+                ExpiresAt = now.AddHours(1),
+                Candidates = [Candidate("SUCCESS1"), Candidate("FAIL1"), Candidate("SUCCESS2")]
+            };
+            var cycle = new TrustedAutomaticCycle(state, storage, () => now);
+            var result = cycle.ExecuteAsync(manifest, (item, submitted, correlationId, _) =>
+            {
+                Require(correlationId.Length == 32, "automatic adapter에 correlation ID가 전달되지 않음");
+                if (item.Candidate.Code == "FAIL1")
+                    throw new InvalidOperationException("synthetic isolated failure");
+                submitted();
+                return Task.FromResult(("success", "synthetic success"));
+            }, CancellationToken.None).GetAwaiter().GetResult();
+
+            Require(result == new AutomaticCycleResult(3, 2, 1),
+                "automatic cycle 결과/실패 격리 집계 실패");
+            var restored = storage.Load();
+            Require(restored.History[account.Id].Keys.Order().SequenceEqual(["SUCCESS1", "SUCCESS2"]),
+                "automatic cycle terminal history 저장 또는 실패 격리 실패");
+            Require(restored.Attempts[account.Id]["FAIL1"].Status == AttemptStatus.TemporaryFailure,
+                "automatic cycle 제출 전 실패가 retry 상태로 저장되지 않음");
+
+            using var cancelled = new CancellationTokenSource();
+            cancelled.Cancel();
+            var cancellationObserved = false;
+            try
+            {
+                cycle.ExecuteAsync(new TrustedCandidateManifest { Candidates = [Candidate("CANCEL1")] },
+                    (_, _, _, _) => Task.FromResult(("success", "unexpected")), cancelled.Token)
+                    .GetAwaiter().GetResult();
+            }
+            catch (OperationCanceledException) { cancellationObserved = true; }
+            Require(cancellationObserved && !state.Attempts[account.Id].ContainsKey("CANCEL1"),
+                "automatic cycle cancellation 전에 attempt가 생성됨");
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
+    }
+
+    private static void TestTrustedManifestInbox()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "SWCouponManagerManifestInboxTest", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var now = new DateTimeOffset(2026, 8, 26, 0, 0, 0, TimeSpan.Zero);
+            var manifestPath = Path.Combine(root, "candidate-manifest.json");
+            var checksumPath = manifestPath + ".sha256";
+            Require(TrustedManifestInbox.TryRead(manifestPath, checksumPath, new Version(1, 4, 6), now) is null,
+                "manifest inbox가 미게시 상태를 오류/작업으로 처리함");
+            var json = $$"""
+            {
+              "schemaVersion": 1,
+              "generatedAt": "{{now:O}}",
+              "expiresAt": "{{now.AddHours(1):O}}",
+              "minimumClientVersion": "1.5.0",
+              "candidates": [{
+                "code": "INBOX1",
+                "sources": ["Synthetic Source"],
+                "firstObservedAt": "{{now.AddMinutes(-1):O}}",
+                "lastObservedAt": "{{now:O}}",
+                "evidenceHashes": ["{{new string('c', 64)}}"],
+                "policyId": "recall-explicit-v1"
+              }]
+            }
+            """;
+            File.WriteAllText(manifestPath, json);
+            File.WriteAllText(checksumPath, TrustedCandidateManifestService.ComputeSha256(json));
+            var manifest = TrustedManifestInbox.TryRead(manifestPath, checksumPath, new Version(1, 5, 0), now);
+            Require(manifest?.Candidates.Single().Code == "INBOX1", "manifest inbox 검증/읽기 실패");
+
+            var checksumReads = 0;
+            var changedDuringRead = false;
+            try
+            {
+                TrustedManifestInbox.TryRead(manifestPath, checksumPath, new Version(1, 5, 0), now,
+                    _ => true,
+                    path => path == checksumPath && ++checksumReads == 2
+                        ? new string('0', 64)
+                        : path == checksumPath
+                            ? TrustedCandidateManifestService.ComputeSha256(json)
+                            : json);
+            }
+            catch (IOException) { changedDuringRead = true; }
+            Require(changedDuringRead, "manifest 게시 중 checksum 변경을 허용함");
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
+    }
+
+    private static void TestCloudWatcherPublication()
+    {
+        var now = new DateTimeOffset(2026, 8, 27, 0, 0, 0, TimeSpan.Zero);
+        var hashIndex = 0;
+        SourceHealth Health(string source) => new(
+            source, true, 1000, 1, 1, [], [], null, 1, 1,
+            [new string("abcdef"[hashIndex++ % 6], 64)], [1], 1, 0, false, []);
+        var health = new[] { Health("SWGT"), Health("SW-Teams"), Health("SWQ"), Health("GitHub Manual") }.ToList();
+        health[0] = health[0] with { ExtraCodes = ["NOISE"] };
+        var scan = new ScanResult(
+            ["CODE2", "NOISE", "CODE1"],
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["CODE1"] = ["SWGT", "GitHub Manual"],
+                ["CODE2"] = ["SWQ"],
+                ["NOISE"] = ["SWGT"]
+            },
+            ["SWGT", "SW-Teams", "SWQ", "GitHub Manual"], [], health);
+        var manifest = CloudWatcher.BuildManifest(scan, now);
+        Require(manifest.Candidates.Select(x => x.Code).SequenceEqual(["CODE1", "CODE2"]),
+            "cloud watcher candidate 순서 또는 production-only extra 제거 실패");
+        Require(manifest.Candidates[0].Sources.SequenceEqual(["GitHub Manual", "SWGT"]) &&
+                manifest.Candidates[0].EvidenceHashes.All(x => x.Length == 64),
+            "cloud watcher attribution/evidence 연결 실패");
+        Require(CloudWatcher.Serialize(manifest) == CloudWatcher.Serialize(manifest),
+            "cloud watcher serialization이 결정적이지 않음");
+
+        var suspiciousHealth = health.ToList();
+        suspiciousHealth[0] = suspiciousHealth[0] with { Suspicious = true, Warnings = ["synthetic"] };
+        var rejected = false;
+        try { CloudWatcher.BuildManifest(scan with { Health = suspiciousHealth }, now); }
+        catch (InvalidDataException) { rejected = true; }
+        Require(rejected, "cloud watcher가 suspicious 필수 소스를 게시함");
+
+        var root = Path.Combine(Path.GetTempPath(), "SWCouponManagerCloudWatcherTest", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            CloudWatcher.PublishAtomically(manifest, root);
+            var manifestPath = Path.Combine(root, "candidate-manifest.json");
+            var checksumPath = manifestPath + ".sha256";
+            var parsed = TrustedManifestInbox.TryRead(manifestPath, checksumPath, new Version(1, 5, 0), now);
+            Require(parsed?.Candidates.Count == 2, "watcher 출력과 Windows inbox 계약 불일치");
+            var originalJson = File.ReadAllText(manifestPath);
+            var originalChecksum = File.ReadAllText(checksumPath);
+            var moves = 0;
+            var replacement = CloudWatcher.BuildManifest(scan, now.AddMinutes(1));
+            var rollbackObserved = false;
+            try
+            {
+                CloudWatcher.PublishAtomically(replacement, root, (source, destination, overwrite) =>
+                {
+                    moves++;
+                    if (moves == 2) throw new IOException("synthetic checksum move failure");
+                    File.Move(source, destination, overwrite);
+                });
+            }
+            catch (IOException) { rollbackObserved = true; }
+            Require(rollbackObserved && File.ReadAllText(manifestPath) == originalJson &&
+                    File.ReadAllText(checksumPath) == originalChecksum,
+                "watcher publication 실패 시 이전 manifest 쌍 복구 실패");
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
+    }
+
+    private static void TestDisposableUpdateTransaction()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "SWCouponManagerDisposableUpdateTest", Guid.NewGuid().ToString("N"));
+        var install = Path.Combine(root, "install");
+        var state = Path.Combine(root, "external-state.json");
+        Directory.CreateDirectory(install);
+        try
+        {
+            File.WriteAllText(Path.Combine(install, "unrelated.txt"), "preserve unrelated");
+            File.WriteAllText(state, "synthetic external state");
+            var unrelatedBefore = File.ReadAllText(Path.Combine(install, "unrelated.txt"));
+            var stateBefore = File.ReadAllText(state);
+            DisposableUpdateTransaction.Apply(AppContext.BaseDirectory, install,
+                path => UpdateHealthCheck.ValidateInstallLayout(path, new Version(1, 5, 0)));
+            Require(File.ReadAllText(Path.Combine(install, "unrelated.txt")) == unrelatedBefore &&
+                    File.ReadAllText(state) == stateBefore,
+                "성공 update가 unrelated/install 외부 state를 변경함");
+
+            var before = Directory.GetFiles(install, "*", SearchOption.AllDirectories)
+                .ToDictionary(path => Path.GetRelativePath(install, path), File.ReadAllBytes,
+                    StringComparer.OrdinalIgnoreCase);
+            var failed = false;
+            try
+            {
+                DisposableUpdateTransaction.Apply(AppContext.BaseDirectory, install,
+                    _ => throw new InvalidOperationException("health should not run"),
+                    injectFailureAfterCopies: 3);
+            }
+            catch (IOException) { failed = true; }
+            var after = Directory.GetFiles(install, "*", SearchOption.AllDirectories)
+                .ToDictionary(path => Path.GetRelativePath(install, path), File.ReadAllBytes,
+                    StringComparer.OrdinalIgnoreCase);
+            Require(failed && before.Count == after.Count && before.All(pair =>
+                    after.TryGetValue(pair.Key, out var bytes) && pair.Value.SequenceEqual(bytes)),
+                "post-copy 실패 rollback이 설치 파일을 byte-for-byte 복원하지 못함");
+            Require(File.ReadAllText(state) == stateBefore,
+                "rollback이 synthetic external state를 변경함");
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
+    }
+
+    private static void TestDisposableUnattendedEndToEnd()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "SWCouponManagerUnattendedE2E", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var now = new DateTimeOffset(2026, 8, 27, 1, 0, 0, TimeSpan.Zero);
+            var hashes = new[] { '1', '2', '3', '4' };
+            var names = new[] { "SWGT", "SW-Teams", "SWQ", "GitHub Manual" };
+            var health = names.Select((name, i) => new SourceHealth(
+                name, true, 100, 1, 1, [], [], null, 1, 1,
+                [new string(hashes[i], 64)], [1], 1, 0, false, [])).ToList();
+            var scan = new ScanResult(["E2ECODE1"],
+                new(StringComparer.OrdinalIgnoreCase) { ["E2ECODE1"] = ["SWGT", "SW-Teams"] },
+                names.ToList(), [], health);
+            CloudWatcher.PublishAtomically(CloudWatcher.BuildManifest(scan, now), root);
+            var manifestPath = Path.Combine(root, "candidate-manifest.json");
+            var manifest = TrustedManifestInbox.TryRead(
+                manifestPath, manifestPath + ".sha256", new Version(1, 5, 0), now)
+                ?? throw new InvalidOperationException("disposable manifest missing");
+
+            var storage = new AppStorage(Path.Combine(root, "agent-state"));
+            var state = new AppState
+            {
+                Accounts = [new Account { Id = "e2e-account", HiveId = "synthetic", Server = "global", Selected = true }]
+            };
+            storage.Save(state);
+            var first = new TrustedAutomaticCycle(state, storage, () => now)
+                .ExecuteAsync(manifest, (_, submitted, _, _) =>
+                {
+                    submitted();
+                    return Task.FromResult(("success", "synthetic e2e success"));
+                }, CancellationToken.None).GetAwaiter().GetResult();
+            Require(first == new AutomaticCycleResult(1, 1, 0), "disposable first catch-up 실행 실패");
+
+            var restarted = storage.Load();
+            var second = new TrustedAutomaticCycle(restarted, storage, () => now.AddMinutes(20))
+                .ExecuteAsync(manifest, (_, _, _, _) =>
+                    throw new InvalidOperationException("terminal coupon resent after restart"),
+                    CancellationToken.None).GetAwaiter().GetResult();
+            Require(second == new AutomaticCycleResult(0, 0, 0) &&
+                    restarted.History["e2e-account"]["E2ECODE1"].Status == "success" &&
+                    restarted.Attempts["e2e-account"]["E2ECODE1"].Status == AttemptStatus.Terminal,
+                "restart/catch-up terminal suppression 실패");
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
+    }
+
+    private static void TestAnomalyEvidenceAndRepairGate()
+    {
+        var now = new DateTimeOffset(2026, 8, 27, 2, 0, 0, TimeSpan.Zero);
+        var health = new List<SourceHealth>
+        {
+            new("Synthetic Source", true, 1000, 8, 9, ["MISSINGCODE"], ["EXTRAUI"],
+                "synthetic redacted anomaly", 2, 2, [new string('d', 64)], [8, 8], 9, 0, true,
+                ["parser missing 1"])
+        };
+        var scan = new ScanResult(["CODE1"],
+            new(StringComparer.OrdinalIgnoreCase) { ["CODE1"] = ["Synthetic Source"] },
+            ["Synthetic Source"], ["Synthetic Source: parser regression"], health);
+        var first = AnomalyEvidenceService.Create(scan, "corr-1", now, "1.5.0", "parser-1");
+        var second = AnomalyEvidenceService.Create(scan, "corr-2", now.AddMinutes(1), "1.5.0", "parser-1");
+        Require(first.EvidenceGroup == second.EvidenceGroup,
+            "동일 payload/parser 증거가 equivalence group으로 압축되지 않음");
+        var json = AnomalyEvidenceService.Serialize(first);
+        Require(!json.Contains("MISSINGCODE", StringComparison.Ordinal) &&
+                !json.Contains("EXTRAUI", StringComparison.Ordinal) &&
+                json.Contains("missingCount", StringComparison.Ordinal),
+            "anomaly evidence가 코드/원문을 노출하거나 redacted count를 잃음");
+        Require(AnomalyEvidenceService.Classify(new RepairProposal(
+                "source-parser", ["source-parser"], HasRegressionFixture: true)) == RepairEligibility.ReviewOnly,
+            "fixture가 있는 source parser 수정이 review-only로 분류되지 않음");
+        Require(AnomalyEvidenceService.Classify(new RepairProposal(
+                "source-parser", ["account"], HasRegressionFixture: true)) == RepairEligibility.Blocked &&
+                AnomalyEvidenceService.Classify(new RepairProposal(
+                    "source-parser", ["source-parser"], HasRegressionFixture: false)) == RepairEligibility.Blocked &&
+                AnomalyEvidenceService.Classify(new RepairProposal(
+                    "feature", ["source-parser"], HasRegressionFixture: true)) == RepairEligibility.Blocked,
+            "critical/no-fixture/non-parser 변경이 자동 review gate를 통과함");
+    }
+
+    private static void TestLoginStartRegistration()
+    {
+        var spec = LoginStartRegistrationFactory.Create(@"C:\Synthetic App\SWCouponManager.exe");
+        Require(spec.Name == "SWCouponManager Background Agent" &&
+                spec.CommandLine == "\"C:\\Synthetic App\\SWCouponManager.exe\" --background",
+            "login-start 등록 명세의 quoting/argument 실패");
+        var rejected = false;
+        try { LoginStartRegistrationFactory.Create("SWCouponManager.exe"); }
+        catch (ArgumentException) { rejected = true; }
+        Require(rejected, "login-start 상대 경로 허용");
+    }
+
+    private static void TestBackgroundAgentLifecycle()
+    {
+        Require(BackgroundAgentLifecycle.DecideClose(backgroundEnabled: true, explicitExit: false) ==
+                WindowCloseDisposition.HideToTray,
+            "background 활성 창 닫기가 tray 숨김으로 결정되지 않음");
+        Require(BackgroundAgentLifecycle.DecideClose(backgroundEnabled: false, explicitExit: false) ==
+                WindowCloseDisposition.Exit &&
+                BackgroundAgentLifecycle.DecideClose(backgroundEnabled: true, explicitExit: true) ==
+                WindowCloseDisposition.Exit,
+            "비활성/명시 종료 정책이 프로세스를 남김");
+
+        var mutexName = "Local\\SWCouponManager-SelfTest-" + Guid.NewGuid().ToString("N");
+        using var first = SingleInstanceLease.TryAcquire(mutexName);
+        Require(first is not null, "single-instance 첫 lease 획득 실패");
+        using var second = SingleInstanceLease.TryAcquire(mutexName);
+        Require(second is null, "single-instance 중복 lease 허용");
+    }
+
+    private static void TestTrayOwnerLifecycle()
+    {
+        for (var i = 0; i < 10; i++)
+        {
+            var owner = new TrayOwner(() => { }, () => { }, () => { });
+            owner.SetPaused(i % 2 == 0);
+            Require(!owner.IsDisposed, $"tray owner 조기 dispose #{i + 1}");
+            owner.Dispose();
+            owner.Dispose();
+            Require(owner.IsDisposed, $"tray owner dispose 실패 #{i + 1}");
+        }
+    }
+
+    private static void TestRedemptionAttemptPersistence()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "SWCouponManagerRedemptionAttemptTest", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var now = new DateTimeOffset(2026, 8, 26, 0, 0, 0, TimeSpan.Zero);
+            var storage = new AppStorage(root);
+            var state = new AppState();
+            var account = new Account { Id = "synthetic-account", HiveId = "synthetic" };
+
+            async Task<(AppState state, AttemptRecord attempt)> Execute(
+                string code, Func<Action, Task<(string status, string message)>> adapter)
+            {
+                var current = storage.Load();
+                var coordinator = new RedemptionAttemptCoordinator(current, storage, () => now, TimeSpan.FromMinutes(1));
+                string? loggedCorrelation = null;
+                await coordinator.ExecuteAsync(new WorkItem(account, code), adapter, id => loggedCorrelation = id);
+                var restored = storage.Load();
+                Require(loggedCorrelation == restored.Attempts[account.Id][code].CorrelationId,
+                    "attempt correlation이 audit 경계로 전달되지 않음");
+                return (restored, restored.Attempts[account.Id][code]);
+            }
+
+            var terminal = Execute("TERMINAL1", submitted =>
+            {
+                submitted();
+                return Task.FromResult(("success", "synthetic success"));
+            }).GetAwaiter().GetResult();
+            Require(terminal.attempt.Status == AttemptStatus.Terminal,
+                "terminal 결과가 제출 경계 뒤 영속화되지 않음");
+
+            var preSubmit = Execute("PRESUBMIT1", _ =>
+                Task.FromResult(("error", "synthetic pre-submit failure"))).GetAwaiter().GetResult();
+            Require(preSubmit.attempt.Status == AttemptStatus.TemporaryFailure && preSubmit.attempt.RetryAfter > now,
+                "제출 전 오류가 bounded retry로 영속화되지 않음");
+
+            try
+            {
+                Execute("POSTSUBMIT1", submitted =>
+                {
+                    submitted();
+                    throw new InvalidOperationException("synthetic crash after submit");
+                }).GetAwaiter().GetResult();
+                throw new InvalidOperationException("제출 후 합성 crash가 발생하지 않음");
+            }
+            catch (InvalidOperationException ex) when (ex.Message == "synthetic crash after submit") { }
+
+            var restarted = storage.Load();
+            Require(restarted.Attempts[account.Id]["POSTSUBMIT1"].Status == AttemptStatus.Ambiguous,
+                "제출 후 crash가 restart 시 ambiguous로 격리되지 않음");
+            var restartedJournal = new AttemptJournal(restarted, () => now.AddHours(1));
+            Require(!restartedJournal.CanQueue(account.Id, "POSTSUBMIT1", restarted.History),
+                "restart 후 ambiguous 시도가 자동 재전송됨");
+
+            try
+            {
+                Execute("CANCELBEFORE1", _ => Task.FromCanceled<(string, string)>(new(true)))
+                    .GetAwaiter().GetResult();
+            }
+            catch (OperationCanceledException) { }
+            var cancelledBefore = storage.Load();
+            Require(cancelledBefore.Attempts[account.Id]["CANCELBEFORE1"].Status == AttemptStatus.TemporaryFailure,
+                "제출 전 cancellation이 bounded retry 상태로 저장되지 않음");
+
+            try
+            {
+                Execute("CANCELAFTER1", submitted =>
+                {
+                    submitted();
+                    return Task.FromCanceled<(string, string)>(new(true));
+                }).GetAwaiter().GetResult();
+            }
+            catch (OperationCanceledException) { }
+            var cancelledAfter = storage.Load();
+            Require(cancelledAfter.Attempts[account.Id]["CANCELAFTER1"].Status == AttemptStatus.Ambiguous,
+                "제출 후 cancellation이 ambiguous로 격리되지 않음");
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
     }
 
     private static void TestRedemptionProgressAndServer()

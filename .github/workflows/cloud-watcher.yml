@@ -1,0 +1,36 @@
+name: Build Trusted Candidate Manifest
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  watcher:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Restore
+        run: dotnet restore -r win-x64 -p:SelfContained=false
+      - name: Build and run offline regressions
+        shell: pwsh
+        run: |
+          dotnet build -c Release -r win-x64 --no-restore
+          dotnet run -c Release --no-build -- --self-test
+      - name: Build live gated manifest
+        run: dotnet run -c Release --no-build -- --build-manifest --output watcher-output
+      - name: Upload candidate manifest evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: trusted-candidate-manifest
+          path: |
+            watcher-output/candidate-manifest.json
+            watcher-output/candidate-manifest.json.sha256
+          if-no-files-found: error
+          retention-days: 7

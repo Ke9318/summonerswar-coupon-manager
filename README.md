@@ -1,5 +1,7 @@
 # Summoners War Coupon Manager
 
+Current source version: **1.5.0**. The unattended watcher/agent path is disabled by default until trusted-manifest delivery and activation gates are explicitly completed.
+
 Windows용 Summoners War 쿠폰 검색·자동 등록 GUI 프로그램입니다.
 
 ## 주요 기능
@@ -43,7 +45,9 @@ Windows용 Summoners War 쿠폰 검색·자동 등록 GUI 프로그램입니다.
 
 ## 자동 업데이트
 
-실행 시 `Ke9318/summonerswar-coupon-manager`의 최신 GitHub Release를 확인합니다. 사용자가 업데이트를 누르면 `SWCouponManager-win-x64.zip`을 임시 폴더에 다운로드하고 프로그램 파일만 교체한 뒤 자동 재시작합니다. `%LOCALAPPDATA%\SWCouponManager\`의 사용자 데이터는 업데이트 대상에 포함되지 않습니다.
+실행 시 `Ke9318/summonerswar-coupon-manager`의 최신 GitHub Release를 확인합니다. 자동 업데이트는 `SWCouponManager-win-x64.zip`과 `SWCouponManager-win-x64.zip.sha256`이 모두 있는 릴리스만 제안합니다. 사용자가 업데이트를 누르면 ZIP의 SHA-256을 검증하고 필수 파일·JSON·어셈블리 버전을 확인한 뒤, 교체 대상인 기존 프로그램 파일을 임시 백업합니다. 새 버전의 오프라인 상태검사가 실패하면 건드린 파일만 원래 상태로 복원하고 기존 버전을 다시 시작합니다. `%LOCALAPPDATA%\SWCouponManager\`의 사용자 데이터는 다운로드·백업·교체 대상에 포함되지 않습니다.
+
+SHA-256은 다운로드 손상과 GitHub Release 자산 불일치를 탐지하는 장치이며, 저장소나 GitHub 계정 자체가 침해된 경우까지 방어하는 독립 서명은 아닙니다.
 
 ## 로컬 빌드
 
@@ -80,4 +84,4 @@ Get-Content "$env:TEMP\SWCouponManager-scan-test.log"
 
 프로젝트 `<Version>`과 일치하는 `v1.0.0`, `v1.3.1` 형식의 태그를 push하면 `.github/workflows/release.yml`이 Windows x64 framework-dependent 배포본을 만들고 다음 이름으로 업로드합니다.
 
-`SWCouponManager-win-x64.zip`
+`SWCouponManager-win-x64.zip` 및 `SWCouponManager-win-x64.zip.sha256`

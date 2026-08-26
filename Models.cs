@@ -27,8 +27,12 @@ public sealed class AppState
     public Dictionary<string, List<string>> CodeSources { get; set; } = [];
     public Dictionary<string, Dictionary<string, ObservedCodeState>> ObservedCodesBySource { get; set; } = [];
     public Dictionary<string, SourceInventoryState> SourceInventories { get; set; } = [];
+    public Dictionary<string, Dictionary<string, AttemptRecord>> Attempts { get; set; } = [];
     public DateTimeOffset? LastScanAt { get; set; }
     public string Mode { get; set; } = "new";
+    public bool BackgroundAutomationEnabled { get; set; }
+    public bool BackgroundAutomationPaused { get; set; }
+    public DateTimeOffset? LastAutomaticRunAt { get; set; }
     public int WindowX { get; set; } = -1;
     public int WindowY { get; set; } = -1;
     public int WindowW { get; set; } = 720;
@@ -79,3 +83,25 @@ public sealed record SourceHealth(
     int ObservedRetainedCount = 0,
     string FreshnessEvidence = "single response");
 public sealed record WorkItem(Account Account, string Code);
+
+public sealed class AttemptRecord
+{
+    public string AttemptId { get; set; } = Guid.NewGuid().ToString("N");
+    public string Status { get; set; } = AttemptStatus.Queued;
+    public int TemporaryFailures { get; set; }
+    public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? RetryAfter { get; set; }
+    public string? TerminalStatus { get; set; }
+    public string CorrelationId { get; set; } = Guid.NewGuid().ToString("N");
+}
+
+public static class AttemptStatus
+{
+    public const string Queued = "queued";
+    public const string Executing = "executing";
+    public const string Verifying = "verifying";
+    public const string TemporaryFailure = "temporary_failure";
+    public const string Ambiguous = "ambiguous";
+    public const string Terminal = "terminal";
+}

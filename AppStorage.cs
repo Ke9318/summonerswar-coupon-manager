@@ -42,6 +42,7 @@ public sealed class AppStorage
                     state.CodeSources ??= [];
                     state.ObservedCodesBySource ??= [];
                     state.SourceInventories ??= [];
+                    state.Attempts ??= [];
                     if (state.SeenCodes.Count == 0 && state.LastScanCodes.Count > 0)
                         state.SeenCodes = state.LastScanCodes.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
                     return state;

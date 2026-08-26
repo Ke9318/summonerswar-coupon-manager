@@ -43,6 +43,14 @@ jobs:
           $test = Start-Process -FilePath .\publish\SWCouponManager.exe -ArgumentList "--self-test" -Wait -PassThru
           if ($test.ExitCode -ne 0) { throw "Self-test failed with exit code $($test.ExitCode)" }
 
+      - name: Run staged update health check
+        shell: pwsh
+        run: |
+          [xml]$project = Get-Content -LiteralPath SWCouponManager.csproj
+          $version = $project.Project.PropertyGroup.Version
+          $test = Start-Process -FilePath .\publish\SWCouponManager.exe -ArgumentList "--update-health-check", "--expected-version", $version -Wait -PassThru
+          if ($test.ExitCode -ne 0) { throw "Staged update health check failed with exit code $($test.ExitCode)" }
+
       - name: Run live source completeness gate
         shell: pwsh
         run: |
@@ -80,6 +88,14 @@ jobs:
             throw "Release ZIP was not created"
           }
 
+      - name: Create and verify SHA-256 checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash -LiteralPath SWCouponManager-win-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          Set-Content -LiteralPath SWCouponManager-win-x64.zip.sha256 -Value "$hash  SWCouponManager-win-x64.zip" -Encoding ascii
+          $recorded = ((Get-Content -LiteralPath SWCouponManager-win-x64.zip.sha256 -Raw).Trim() -split '\s+')[0]
+          if ($recorded -ne $hash) { throw "Release checksum verification failed" }
+
       - name: Create GitHub Release
         shell: pwsh
         env:
@@ -87,7 +103,7 @@ jobs:
         run: |
           $tag = "${{ github.ref_name }}"
           if (gh release view $tag 2>$null) {
-            gh release upload $tag "SWCouponManager-win-x64.zip" --clobber
+            gh release upload $tag "SWCouponManager-win-x64.zip" "SWCouponManager-win-x64.zip.sha256" --clobber
           } else {
-            gh release create $tag "SWCouponManager-win-x64.zip" --generate-notes --title $tag
+            gh release create $tag "SWCouponManager-win-x64.zip" "SWCouponManager-win-x64.zip.sha256" --generate-notes --title $tag
           }

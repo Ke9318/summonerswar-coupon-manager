@@ -210,7 +210,7 @@ public sealed class CouponSourceService
                 : "single response; freshness not independently verified";
             var health = new SourceHealth(source.Name, true, currentBytes, currentUnion.Count, referenceUnion.Count,
                 missing, extra, suspicious ? string.Join("; ", warnings) : null, attempts, responses.Count,
-                responses.Select(x => x.Hash[..12]).ToList(), responses.Select(x => x.Production.Count).ToList(),
+                responses.Select(x => x.Hash).ToList(), responses.Select(x => x.Production.Count).ToList(),
                 advertised, seedRetained.Count + observedRetained.Count, suspicious, warnings,
                 seedRetained.Count, observedRetained.Count, freshness);
             return new SourceScan(source.Name, finalUnion.OrderBy(x => x).ToList(), health, null);

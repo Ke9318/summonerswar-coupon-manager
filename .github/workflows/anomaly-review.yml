@@ -1,0 +1,26 @@
+name: Build Redacted Anomaly Evidence
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  evidence:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - run: dotnet restore -r win-x64 -p:SelfContained=false
+      - run: dotnet build -c Release -r win-x64 --no-restore
+      - run: dotnet run -c Release --no-build -- --self-test
+      - run: dotnet run -c Release --no-build -- --anomaly-evidence --output anomaly-evidence.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: redacted-anomaly-evidence
+          path: anomaly-evidence.json
+          if-no-files-found: error
+          retention-days: 7

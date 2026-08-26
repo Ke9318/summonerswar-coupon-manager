@@ -47,6 +47,8 @@ public sealed class MainForm : Form
     private readonly GroupBox _couponGroup = new() { Text = "쿠폰 후보", Dock = DockStyle.Fill };
     private readonly Label _version = new() { AutoSize = true, ForeColor = Color.DimGray };
     private readonly FlowLayoutPanel _advanced = new() { Visible = false, AutoSize = true };
+    private readonly CheckBox _backgroundEnabled = new() { Text = "백그라운드 자동 실행", AutoSize = true };
+    private readonly Button _backgroundPause = new() { Text = "자동 실행 일시정지", AutoSize = true, Enabled = false };
     private readonly ToolTip _codeTip = new();
     private readonly WebView2 _web = new();
 
@@ -54,6 +56,9 @@ public sealed class MainForm : Form
     private CancellationTokenSource? _workCts;
     private bool _loadingAccounts;
     private List<SourceHealth> _lastSourceHealth = [];
+    private TrayOwner? _trayOwner;
+    private BackgroundAgentScheduler? _backgroundScheduler;
+    private bool _explicitExit;
 
     public MainForm()
     {
@@ -74,6 +79,8 @@ public sealed class MainForm : Form
         _version.Text = $"v{_updates.CurrentVersion.ToString(3)}";
         LoadAccountsToGrid();
         LoadCodesToUi();
+        _backgroundEnabled.Checked = _state.BackgroundAutomationEnabled;
+        _backgroundPause.Enabled = _state.BackgroundAutomationEnabled;
 
         Shown += async (_, _) =>
         {
@@ -83,6 +90,11 @@ public sealed class MainForm : Form
                 await CheckUpdateAsync();
                 if (_state.LastScanAt is null || DateTimeOffset.Now - _state.LastScanAt > TimeSpan.FromMinutes(5))
                     await ScanAsync();
+                if (_state.BackgroundAutomationEnabled)
+                {
+                    EnsureTrayOwner();
+                    StartBackgroundScheduler();
+                }
             }
             catch (Exception ex)
             {
@@ -90,14 +102,27 @@ public sealed class MainForm : Form
             }
         };
 
-        FormClosing += (_, _) =>
+        FormClosing += (_, e) =>
         {
+            if (BackgroundAgentLifecycle.DecideClose(_state.BackgroundAutomationEnabled, _explicitExit) ==
+                WindowCloseDisposition.HideToTray)
+            {
+                e.Cancel = true;
+                Hide();
+                return;
+            }
             SaveGridToState();
             _state.WindowX = Location.X;
             _state.WindowY = Location.Y;
             _state.WindowW = Width;
             _state.WindowH = Height;
             _storage.Save(_state);
+            _trayOwner?.Dispose();
+        };
+        FormClosed += async (_, _) =>
+        {
+            if (_backgroundScheduler is not null)
+                await _backgroundScheduler.DisposeAsync();
         };
     }
 
@@ -206,6 +231,8 @@ public sealed class MainForm : Form
 
         _advanced.Controls.Add(_addAccount);
         _advanced.Controls.Add(_deleteAccount);
+        _advanced.Controls.Add(_backgroundEnabled);
+        _advanced.Controls.Add(_backgroundPause);
         var secondary = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true };
         secondary.Controls.Add(_history);
         secondary.Controls.Add(_settings);
@@ -240,11 +267,143 @@ public sealed class MainForm : Form
         _deleteAccount.Click += (_, _) => DeleteSelectedRows();
         _settings.Click += (_, _) => _advanced.Visible = !_advanced.Visible;
         _history.Click += (_, _) => ShowHistory();
+        _backgroundEnabled.CheckedChanged += (_, _) => SetBackgroundEnabled(_backgroundEnabled.Checked);
+        _backgroundPause.Click += (_, _) => ToggleBackgroundPaused();
         _update.Click += async (_, _) =>
         {
             if (_availableUpdate is not null)
                 await _updates.DownloadAndRestartAsync(_availableUpdate, SetStatus);
         };
+    }
+
+    private void SetBackgroundEnabled(bool enabled)
+    {
+        _state.BackgroundAutomationEnabled = enabled;
+        _backgroundPause.Enabled = enabled;
+        if (enabled)
+        {
+            EnsureTrayOwner();
+            if (Visible) StartBackgroundScheduler();
+        }
+        else
+        {
+            _state.BackgroundAutomationPaused = false;
+            _trayOwner?.Dispose();
+            _trayOwner = null;
+            _ = StopBackgroundSchedulerAsync();
+        }
+        _storage.Save(_state);
+        SetStatus(enabled
+            ? "백그라운드 자동 실행 준비됨 · 스케줄 실행 연결 전"
+            : "백그라운드 자동 실행 꺼짐");
+    }
+
+    private void ToggleBackgroundPaused()
+    {
+        _state.BackgroundAutomationPaused = !_state.BackgroundAutomationPaused;
+        _storage.Save(_state);
+        _trayOwner?.SetPaused(_state.BackgroundAutomationPaused);
+        if (_state.BackgroundAutomationPaused) _backgroundScheduler?.Pause();
+        else _backgroundScheduler?.Resume();
+        _backgroundPause.Text = _state.BackgroundAutomationPaused ? "자동 실행 재개" : "자동 실행 일시정지";
+    }
+
+    private void EnsureTrayOwner()
+    {
+        if (_trayOwner is not null) return;
+        _trayOwner = new TrayOwner(
+            showWindow: () =>
+            {
+                Show();
+                WindowState = FormWindowState.Normal;
+                Activate();
+            },
+            togglePause: ToggleBackgroundPaused,
+            exit: () =>
+            {
+                _explicitExit = true;
+                Close();
+            });
+        _trayOwner.SetPaused(_state.BackgroundAutomationPaused);
+        _backgroundPause.Text = _state.BackgroundAutomationPaused ? "자동 실행 재개" : "자동 실행 일시정지";
+    }
+
+    private void StartBackgroundScheduler()
+    {
+        if (_backgroundScheduler is null)
+        {
+            _backgroundScheduler = new BackgroundAgentScheduler(
+                RunTrustedAutomaticCycleAsync,
+                _state.LastAutomaticRunAt,
+                interval: TimeSpan.FromMinutes(15));
+        }
+        if (_state.BackgroundAutomationPaused) _backgroundScheduler.Pause();
+        else _backgroundScheduler.Resume();
+        _backgroundScheduler.Start();
+    }
+
+    private async Task StopBackgroundSchedulerAsync()
+    {
+        var scheduler = _backgroundScheduler;
+        _backgroundScheduler = null;
+        if (scheduler is not null) await scheduler.DisposeAsync();
+    }
+
+    private async Task RunTrustedAutomaticCycleAsync(CancellationToken ct)
+    {
+        if (_workCts is not null)
+        {
+            SetStatus("자동 실행 건너뜀 · 다른 작업 진행 중");
+            return;
+        }
+        var automaticCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _workCts = automaticCts;
+        ToggleWorking(true);
+        try
+        {
+            var manifestPath = Path.Combine(_storage.DataDir, "candidate-manifest.json");
+            var manifest = TrustedManifestInbox.TryRead(
+                manifestPath,
+                manifestPath + ".sha256",
+                _updates.CurrentVersion,
+                DateTimeOffset.UtcNow);
+            if (manifest is null)
+            {
+                SetStatus("자동 실행 대기 · trusted manifest 없음");
+                return;
+            }
+
+            SaveGridToState();
+            await EnsureWebViewAsync();
+            var cycle = new TrustedAutomaticCycle(_state, _storage);
+            var result = await cycle.ExecuteAsync(manifest, async (automatic, submitted, correlationId, token) =>
+            {
+                var item = automatic.Redemption;
+                _results.Items.Insert(0, FormatRedemptionProgress(item, "자동 등록 대기"));
+                void Progress(string stage)
+                {
+                    _results.Items[0] = FormatRedemptionProgress(item, stage);
+                    WriteRedemptionProgress(item, stage, correlationId);
+                }
+                Progress($"trusted manifest · {string.Join(",", automatic.Candidate.Sources)}");
+                return await RedeemAsync(item, Progress, token, submitted);
+            }, automaticCts.Token);
+            _state.LastAutomaticRunAt = DateTimeOffset.UtcNow;
+            _storage.Save(_state);
+            SetStatus($"자동 실행 완료 · 계획 {result.Planned} · 완료 {result.Completed} · 실패 {result.Failed}");
+        }
+        catch (OperationCanceledException) when (automaticCts.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            SetStatus("자동 실행 보류: " + ex.Message);
+            throw;
+        }
+        finally
+        {
+            if (ReferenceEquals(_workCts, automaticCts)) _workCts = null;
+            automaticCts.Dispose();
+            ToggleWorking(false);
+        }
     }
 
     private void ShowHistory()
@@ -429,11 +588,14 @@ public sealed class MainForm : Form
     {
         if (!history.TryGetValue(accountId, out var perAccount)) return true;
         if (!perAccount.TryGetValue(code, out var rec)) return true;
-        return !IsCompletedStatus(rec.Status);
+        return rec.Status == "error";
     }
 
     internal static bool IsCompletedStatus(string? status) =>
         status is "success" or "already" or "expired" or "invalid";
+
+    internal static bool IsAutomaticBlockedStatus(string? status) =>
+        IsCompletedStatus(status) || status == "ambiguous";
 
     internal static List<string> GetNewCodes(IEnumerable<string> currentCodes, ISet<string> seenCodes) =>
         currentCodes.Where(code => !seenCodes.Contains(code))
@@ -445,6 +607,12 @@ public sealed class MainForm : Form
     {
         var value = server?.Trim().ToLowerInvariant() ?? "";
         return ServerChoices.Any(choice => choice.Value == value) ? value : "korea";
+    }
+
+    internal static bool IsSupportedServer(string? server)
+    {
+        var value = server?.Trim().ToLowerInvariant() ?? "";
+        return ServerChoices.Any(choice => choice.Value == value);
     }
 
     private async Task RunAsync(bool retryAll)
@@ -469,7 +637,12 @@ public sealed class MainForm : Form
             return;
         }
 
-        var queue = BuildQueue(selected, _state.LastScanCodes, _state.History, retryAll);
+        var coordinator = new RedemptionAttemptCoordinator(_state, _storage);
+        var queue = retryAll
+            ? BuildQueue(selected, _state.LastScanCodes, _state.History, retryAll: true)
+            : BuildQueue(selected, _state.LastScanCodes, _state.History)
+                .Where(coordinator.CanQueue)
+                .ToList();
 
         if (queue.Count == 0)
         {
@@ -497,12 +670,13 @@ public sealed class MainForm : Form
             {
                 _workCts.Token.ThrowIfCancellationRequested();
                 var item = queue[i];
+                string? correlationId = retryAll ? "manual-retry-all" : null;
                 SetStatus($"쿠폰 받는 중 · {i + 1} / {queue.Count} · {item.Account.Name} · {item.Code} 확인 중...");
                 _results.Items.Insert(0, FormatRedemptionProgress(item, "등록 대기"));
                 void Progress(string stage)
                 {
                     _results.Items[0] = FormatRedemptionProgress(item, stage);
-                    WriteRedemptionProgress(item, stage);
+                    WriteRedemptionProgress(item, stage, correlationId);
                 }
                 Progress($"페이지 준비 · 서버 {ServerDisplayName(item.Account.Server)}");
 
@@ -510,7 +684,11 @@ public sealed class MainForm : Form
                 string message;
                 try
                 {
-                    (status, message) = await RedeemAsync(item, Progress, _workCts.Token);
+                    (status, message) = retryAll
+                        ? await RedeemAsync(item, Progress, _workCts.Token)
+                        : await coordinator.ExecuteAsync(item,
+                            submitted => RedeemAsync(item, Progress, _workCts.Token, submitted),
+                            startedCorrelationId => correlationId = startedCorrelationId);
                 }
                 catch (OperationCanceledException) when (_workCts.IsCancellationRequested)
                 {
@@ -556,7 +734,7 @@ public sealed class MainForm : Form
         .ToList();
 
     private async Task<(string status, string message)> RedeemAsync(
-        WorkItem item, Action<string> progress, CancellationToken ct)
+        WorkItem item, Action<string> progress, CancellationToken ct, Action? submitted = null)
     {
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -712,6 +890,7 @@ public sealed class MainForm : Form
                 if (!string.Equals(clicked, "true", StringComparison.OrdinalIgnoreCase))
                     return ("error", "쿠폰 사용 확인 버튼을 누르지 못했습니다.");
                 confirmationClicked = true;
+                submitted?.Invoke();
                 progress("계정/쿠폰 확인 완료 · 최종 사용 요청 전송");
                 continue;
             }
@@ -740,13 +919,13 @@ public sealed class MainForm : Form
         return ServerChoices.First(choice => choice.Value == normalized).DisplayName + $" ({normalized})";
     }
 
-    private void WriteRedemptionProgress(WorkItem item, string stage)
+    private void WriteRedemptionProgress(WorkItem item, string stage, string? correlationId)
     {
         try
         {
             Directory.CreateDirectory(_storage.DataDir);
             File.AppendAllText(Path.Combine(_storage.DataDir, "redemption.log"),
-                $"[{DateTimeOffset.Now:O}] account={item.Account.Name} code={item.Code} server={NormalizeServer(item.Account.Server)} stage={stage}{Environment.NewLine}");
+                $"[{DateTimeOffset.Now:O}] correlation={correlationId ?? "pending"} code={item.Code} server={NormalizeServer(item.Account.Server)} stage={stage}{Environment.NewLine}");
         }
         catch { }
     }
@@ -775,20 +954,7 @@ public sealed class MainForm : Form
         };
     }
 
-    internal static string Classify(string message)
-    {
-        var m = message.ToLowerInvariant();
-
-        if (Regex.IsMatch(m, "already|used|이미\\s*사용|사용한|등록된")) return "already";
-        if (Regex.IsMatch(m, "expired|만료")) return "expired";
-        if (Regex.IsMatch(m, "success|complete|reward|성공|완료|보상|지급")) return "success";
-        if (Regex.IsMatch(m, "invalid|not valid|유효하지|유효한.*아닙니다|존재하지|wrong|잘못된|없는 쿠폰")) return "invalid";
-        if (Regex.IsMatch(m, "error|오류|fail|실패")) return "error";
-        // Unrecognized Hive responses are operational failures, not final coupon
-        // verdicts. Keeping them retryable prevents a UI wording change from losing a
-        // real coupon while still making error the only retryable stored status.
-        return "error";
-    }
+    internal static string Classify(string message) => RedemptionResultClassifier.Classify(message);
 
     private static string DisplayStatus(string status) => status switch
     {
@@ -797,6 +963,7 @@ public sealed class MainForm : Form
         "expired" => "만료",
         "invalid" => "사용할 수 없음",
         "error" => "오류 - 다음 실행에서 재시도",
+        "ambiguous" => "확인 필요 - 자동 재시도 안 함",
         _ => status
     };
 
