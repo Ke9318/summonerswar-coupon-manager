@@ -2,6 +2,15 @@ name: Build Trusted Candidate Manifest
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "coupon_candidates.json"
+      - "trusted_inventory_seed.json"
+      - "CouponSourceService.cs"
+      - "ReferenceInventoryService.cs"
+      - "CloudWatcher.cs"
+      - ".github/workflows/cloud-watcher.yml"
   schedule:
     # Keep the 15-minute cadence off common quarter-hour load boundaries.
     - cron: "13,28,43,58 * * * *"

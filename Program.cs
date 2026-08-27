@@ -21,6 +21,20 @@ internal static class Program
             return RunDisposableUpdateClient(args);
         if (args.Contains("--remote-manifest-gate", StringComparer.OrdinalIgnoreCase))
             return TrustedManifestRemoteClient.RunGateAsync(args).GetAwaiter().GetResult();
+        if (args.Contains("--enable-background", StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                BackgroundActivation.Enable(new AppStorage(), Environment.ProcessPath
+                    ?? throw new InvalidOperationException("실행 파일 경로를 확인할 수 없습니다."));
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine(ex.Message);
+                return 1;
+            }
+        }
 
         try
         {
@@ -47,6 +61,7 @@ internal static class Program
             AppDomain.CurrentDomain.UnhandledException += (_, e) =>
                 CrashReporter.Report(e.ExceptionObject as Exception ?? new Exception("알 수 없는 오류"));
             var smoke = args.Contains("--gui-smoke-test", StringComparer.OrdinalIgnoreCase);
+            var backgroundStart = args.Contains("--background", StringComparer.OrdinalIgnoreCase);
             var allowTerminalOverride = args.Contains("--approved-live-retry-terminal-one", StringComparer.OrdinalIgnoreCase);
             var approvedLiveOne = allowTerminalOverride ||
                 args.Contains("--approved-live-redemption-one", StringComparer.OrdinalIgnoreCase);
@@ -84,12 +99,14 @@ internal static class Program
                     throw new ArgumentException("--approved-account-count는 1 또는 2여야 합니다.");
             }
             var form = smoke
-                ? new MainForm(smokeStorage!, suppressStartupNetwork: true)
+                ? new MainForm(smokeStorage!, suppressStartupNetwork: true, startHidden: backgroundStart,
+                    suppressLoginStartMutation: true)
                 : approvedLiveOne
                     ? new MainForm(new AppStorage(), suppressStartupNetwork: false, approvedLiveOne: true,
                         resultPath: liveResultPath, allowTerminalOverride: allowTerminalOverride,
                         approvedCode: approvedCode, approvedAccountCount: approvedAccountCount)
-                    : new MainForm();
+                    : new MainForm(new AppStorage(), suppressStartupNetwork: false,
+                        startHidden: backgroundStart);
             if (smoke)
             {
                 var holdIndex = Array.FindIndex(args, arg => arg.Equals("--gui-smoke-hold-ms", StringComparison.OrdinalIgnoreCase));

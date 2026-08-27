@@ -1,31 +1,26 @@
-# Current task — P17 remote activation
+# Current task — P18 unattended activation repair
 
 - Tier: Critical
-- Disposition: APPROVE — user explicitly authorized remote push/workflow/schedule/release/installed activation
-- Status: Completed — activation complete; scheduled definition active, first external event not observed
+- Disposition: APPROVE — user requested diagnosis and correction of watcher scheduling and legacy coupon filtering concerns
+- Status: Active
 
 ## Objective
 
-Activate in gate order: push reviewed source, manually run cloud watcher, verify public manifest through the production remote client, observe scheduled health, publish `v1.5.0`, verify remote package update in disposable installation, then update the installed app without exposing account state.
+Make unattended discovery and local execution operationally real: recover missed cloud schedules without duplicate dispatch, register the installed app for Windows login start, honor `--background` as a hidden tray start, and prove legacy `SeenCodes` cannot suppress an untried account+code.
 
 ## Preserve
 
-All P10-P16 evidence, source attribution, privacy, attempt isolation, rollback, default-disabled automation, real one-shot Hive contract, and installed state separation.
+Account/Hive privacy, per-account terminal suppression, no automatic retry-all, trusted-manifest integrity, source completeness gates, attempt isolation, rollback, and explicit high-risk approval boundaries.
 
 ## Validation plan
 
-- Publish the remote-manifest client and 15-minute watcher schedule definition.
-- Push main and manually dispatch watcher; require successful gates and public prerelease assets.
-- Fetch public assets through the production client and compare checksum/schema/attribution.
-- Observe at least one scheduled run or truthfully keep schedule health NOT TESTED.
-- Tag/release only after rebuild/self-test/live completeness/update-health/package checksum pass remotely.
-- Test the remote release in a disposable installation before installed replacement.
-- Never print or inspect real account state/logs during installed activation.
-
-## Rollback
-
-Rollback points are local commits `d8b5218`, `f3de8d5`, `77906e7`, and `f93d074`; release/update rollback uses the directly tested package transaction and production updater path.
+- Prove `SeenCodes` is display-only and that only terminal/ambiguous/backoff state for the same account+code blocks automatic planning.
+- Add a non-overlapping 25-minute stale-manifest recovery dispatch to the existing 15-minute monitoring heartbeat.
+- Run the watcher on relevant main pushes while retaining the independent GitHub schedule.
+- Test login-start registry value generation/removal with injected synthetic stores.
+- Test background activation state persistence and hidden GUI lifecycle with synthetic data.
+- Publish and verify v1.5.1 before enabling the installed app without reading real account state.
 
 ## Result
 
-Remote release and installed activation passed. The scheduled definition is active on the default branch and the identical manual workflow passed twice, but GitHub did not create a `schedule` event during the observed windows; this remains explicitly NOT TESTED rather than blocking the completed activation. See [`P17-001-remote-activation-result.md`](P17-001-remote-activation-result.md).
+Pending.

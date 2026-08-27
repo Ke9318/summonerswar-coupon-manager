@@ -22,7 +22,8 @@ internal sealed class TrustedManifestRemoteClient
         {
             Timeout = TimeSpan.FromSeconds(20)
         };
-        http.DefaultRequestHeaders.UserAgent.ParseAdd("SWCouponManager/1.5.0");
+        var version = typeof(TrustedManifestRemoteClient).Assembly.GetName().Version?.ToString(3) ?? "unknown";
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("SWCouponManager/" + version);
         http.DefaultRequestHeaders.CacheControl = new() { NoCache = true, NoStore = true };
         _fetch = async (url, ct) => await http.GetStringAsync(
             url + (url.Contains('?') ? "&" : "?") + "_scm=" + Guid.NewGuid().ToString("N"), ct);

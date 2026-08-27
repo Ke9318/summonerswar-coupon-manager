@@ -604,6 +604,7 @@ internal static class SelfTest
         var duplicate2 = new Account { Id = "duplicate", HiveId = "synthetic-2", Server = "europe", Selected = true };
         var state = new AppState
         {
+            SeenCodes = ["NEW1"],
             Accounts =
             [
                 eligible,
@@ -643,7 +644,7 @@ internal static class SelfTest
         var plan = new TrustedAutomaticPlanner(state, () => now).Build(manifest);
         Require(plan.Items.Count == 1 && plan.Items[0].Account.Id == eligible.Id &&
                 plan.Items[0].Candidate.Code == "NEW1",
-            "trusted automatic planner가 terminal/ambiguous/backoff 또는 부적격 계정을 포함함");
+            "trusted automatic planner가 SeenCodes를 실행 필터로 사용했거나 terminal/ambiguous/backoff 또는 부적격 계정을 포함함");
         Require(plan.Items[0].Candidate.Sources.SequenceEqual(["Synthetic Source"]),
             "automatic work item에서 manifest attribution 손실");
         Require(plan.SkippedAccounts == 4 && plan.SkippedCandidates == 3,
@@ -880,7 +881,8 @@ internal static class SelfTest
             var unrelatedBefore = File.ReadAllText(Path.Combine(install, "unrelated.txt"));
             var stateBefore = File.ReadAllText(state);
             DisposableUpdateTransaction.Apply(AppContext.BaseDirectory, install,
-                path => UpdateHealthCheck.ValidateInstallLayout(path, new Version(1, 5, 0)));
+                path => UpdateHealthCheck.ValidateInstallLayout(path,
+                    typeof(SelfTest).Assembly.GetName().Version ?? throw new InvalidOperationException("assembly version missing")));
             Require(File.ReadAllText(Path.Combine(install, "unrelated.txt")) == unrelatedBefore &&
                     File.ReadAllText(state) == stateBefore,
                 "성공 update가 unrelated/install 외부 state를 변경함");
@@ -998,6 +1000,38 @@ internal static class SelfTest
         try { LoginStartRegistrationFactory.Create("SWCouponManager.exe"); }
         catch (ArgumentException) { rejected = true; }
         Require(rejected, "login-start 상대 경로 허용");
+
+        string? writtenName = null;
+        string? writtenCommand = null;
+        LoginStartRegistrationService.Ensure(@"C:\Synthetic App\SWCouponManager.exe", (name, command) =>
+        {
+            writtenName = name;
+            writtenCommand = command;
+        });
+        Require(writtenName == "SWCouponManager Background Agent" &&
+                writtenCommand == "\"C:\\Synthetic App\\SWCouponManager.exe\" --background",
+            "login-start 레지스트리 값 생성 실패");
+        string? removedName = null;
+        LoginStartRegistrationService.Remove(name => removedName = name);
+        Require(removedName == "SWCouponManager Background Agent", "login-start 레지스트리 값 제거 실패");
+
+        var root = Path.Combine(Path.GetTempPath(), "SWCouponManagerBackgroundActivationTest", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var storage = new AppStorage(root);
+            storage.Save(new AppState { BackgroundAutomationEnabled = false, BackgroundAutomationPaused = true });
+            string? activationCommand = null;
+            BackgroundActivation.Enable(storage, @"C:\Synthetic App\SWCouponManager.exe",
+                (_, command) => activationCommand = command);
+            var activated = storage.Load();
+            Require(activated.BackgroundAutomationEnabled && !activated.BackgroundAutomationPaused &&
+                    activationCommand == "\"C:\\Synthetic App\\SWCouponManager.exe\" --background",
+                "background activation이 상태와 login-start를 함께 활성화하지 못함");
+        }
+        finally
+        {
+            try { Directory.Delete(root, true); } catch { }
+        }
     }
 
     private static void TestBackgroundAgentLifecycle()

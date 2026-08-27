@@ -18,6 +18,7 @@ Set-Content -LiteralPath (Join-Path $failure 'unrelated.txt') -Value 'preserve-f
 Set-Content -LiteralPath (Join-Path $failure 'trusted_inventory_seed.json') -Value 'synthetic-prior-version-marker' -Encoding ascii
 
 $zip = Join-Path $web 'SWCouponManager-win-x64.zip'
+$expectedVersion = (Get-Item -LiteralPath (Join-Path $PackageDirectory 'SWCouponManager.exe')).VersionInfo.ProductVersion.Split('+')[0]
 Compress-Archive -Path (Join-Path $PackageDirectory '*') -DestinationPath $zip -Force
 $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
 Set-Content -LiteralPath ($zip + '.sha256') -Value $hash -Encoding ascii
@@ -46,7 +47,7 @@ try {
   $env:SWCM_UPDATE_TEST_LOG_PATH = Join-Path $root 'success-update.log'
   Remove-Item Env:SWCM_UPDATE_TEST_INJECT_POST_COPY_FAILURE -ErrorAction SilentlyContinue
   $client = Start-Process -FilePath (Join-Path $success 'SWCouponManager.exe') -ArgumentList @(
-    '--disposable-update-client','--expected-version','1.5.0',
+    '--disposable-update-client','--expected-version',$expectedVersion,
     '--zip-url',$ZipUrl,
     '--checksum-url',$ChecksumUrl
   ) -WindowStyle Hidden -Wait -PassThru
@@ -68,7 +69,7 @@ try {
   $env:SWCM_UPDATE_TEST_LOG_PATH = Join-Path $root 'failure-update.log'
   $env:SWCM_UPDATE_TEST_INJECT_POST_COPY_FAILURE = '1'
   $client2 = Start-Process -FilePath (Join-Path $failure 'SWCouponManager.exe') -ArgumentList @(
-    '--disposable-update-client','--expected-version','1.5.0',
+    '--disposable-update-client','--expected-version',$expectedVersion,
     '--zip-url',$ZipUrl,
     '--checksum-url',$ChecksumUrl
   ) -WindowStyle Hidden -Wait -PassThru

@@ -60,6 +60,8 @@ public sealed class MainForm : Form
     private TrayOwner? _trayOwner;
     private BackgroundAgentScheduler? _backgroundScheduler;
     private bool _explicitExit;
+    private bool _changingBackgroundSetting;
+    private readonly bool _suppressLoginStartMutation;
 
     internal int ApprovedLiveOneExitCode { get; private set; } = 1;
 
@@ -67,9 +69,10 @@ public sealed class MainForm : Form
 
     internal MainForm(AppStorage storage, bool suppressStartupNetwork, bool approvedLiveOne = false,
         string? resultPath = null, bool allowTerminalOverride = false, string? approvedCode = null,
-        int approvedAccountCount = 1)
+        int approvedAccountCount = 1, bool startHidden = false, bool suppressLoginStartMutation = false)
     {
         _storage = storage;
+        _suppressLoginStartMutation = suppressLoginStartMutation;
         _state = _storage.Load();
 
         Text = "Summoners War 쿠폰 매니저";
@@ -94,6 +97,15 @@ public sealed class MainForm : Form
         {
             try
             {
+                if (startHidden)
+                {
+                    if (!_state.BackgroundAutomationEnabled)
+                    {
+                        RequestExplicitExit();
+                        return;
+                    }
+                    Hide();
+                }
                 if (approvedLiveOne)
                 {
                     await RunApprovedLiveOneAsync(resultPath, allowTerminalOverride, approvedCode, approvedAccountCount);
@@ -445,6 +457,24 @@ public sealed class MainForm : Form
 
     private void SetBackgroundEnabled(bool enabled)
     {
+        if (_changingBackgroundSetting) return;
+        try
+        {
+            if (!_suppressLoginStartMutation)
+            {
+                if (enabled) LoginStartRegistrationService.Ensure(Application.ExecutablePath);
+                else LoginStartRegistrationService.Remove();
+            }
+        }
+        catch (Exception ex)
+        {
+            _changingBackgroundSetting = true;
+            _backgroundEnabled.Checked = _state.BackgroundAutomationEnabled;
+            _changingBackgroundSetting = false;
+            MessageBox.Show("로그인 자동 시작 설정에 실패했습니다: " + ex.Message,
+                "SWCouponManager", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
         _state.BackgroundAutomationEnabled = enabled;
         _backgroundPause.Enabled = enabled;
         if (enabled)
@@ -461,7 +491,7 @@ public sealed class MainForm : Form
         }
         _storage.Save(_state);
         SetStatus(enabled
-            ? "백그라운드 자동 실행 준비됨 · 스케줄 실행 연결 전"
+            ? "백그라운드 자동 실행 켜짐 · Windows 로그인 시 숨김 시작"
             : "백그라운드 자동 실행 꺼짐");
     }
 

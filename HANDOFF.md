@@ -4,7 +4,7 @@ Current task: [`work/current-task.md`](work/current-task.md)
 
 Project rules: [`PROJECT_CHARTER.md`](PROJECT_CHARTER.md) and [`AGENTS.md`](AGENTS.md)
 
-Latest milestone: P17 remote activation complete—v1.5.0 release, installed deployment, public manifest, and approved two-account probe are complete. The active GitHub schedule has not yet emitted an observed `schedule` event. See [`work/current-task.md`](work/current-task.md).
+Latest milestone: P18 unattended activation repair—cloud schedule recovery and real Windows login-start activation in progress. See [`work/current-task.md`](work/current-task.md).
 
 Architecture: [`architecture/unattended-automation.md`](architecture/unattended-automation.md)
 
@@ -22,4 +22,4 @@ P17 progress: [`work/P17-001-remote-activation-progress.md`](work/P17-001-remote
 P17 result: [`work/P17-001-remote-activation-result.md`](work/P17-001-remote-activation-result.md)
 P17 two-account probe: [`work/P17-002-live-two-account-coupon-result.md`](work/P17-002-live-two-account-coupon-result.md)
 
-Next action: operationally observe the first GitHub `schedule` event when it appears; no implementation or activation gate remains open.
+Next action: verify v1.5.1 gates, publish/release, update the installed app, enable background startup, and observe a recovered cloud watcher run.
