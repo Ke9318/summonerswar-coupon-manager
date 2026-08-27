@@ -18,7 +18,7 @@ public sealed class MainForm : Form
         new("europe", "유럽 서버")
     ];
 
-    private readonly AppStorage _storage = new();
+    private readonly AppStorage _storage;
     private readonly CouponSourceService _sources = new();
     private readonly GitHubUpdateService _updates = new();
     private AppState _state;
@@ -60,8 +60,11 @@ public sealed class MainForm : Form
     private BackgroundAgentScheduler? _backgroundScheduler;
     private bool _explicitExit;
 
-    public MainForm()
+    public MainForm() : this(new AppStorage(), suppressStartupNetwork: false) { }
+
+    internal MainForm(AppStorage storage, bool suppressStartupNetwork)
     {
+        _storage = storage;
         _state = _storage.Load();
 
         Text = "Summoners War 쿠폰 매니저";
@@ -86,6 +89,12 @@ public sealed class MainForm : Form
         {
             try
             {
+                if (suppressStartupNetwork)
+                {
+                    if (_state.BackgroundAutomationEnabled) EnsureTrayOwner();
+                    SetStatus("disposable GUI smoke ready");
+                    return;
+                }
                 await EnsureWebViewAsync();
                 await CheckUpdateAsync();
                 if (_state.LastScanAt is null || DateTimeOffset.Now - _state.LastScanAt > TimeSpan.FromMinutes(5))
@@ -274,6 +283,12 @@ public sealed class MainForm : Form
             if (_availableUpdate is not null)
                 await _updates.DownloadAndRestartAsync(_availableUpdate, SetStatus);
         };
+    }
+
+    internal void RequestExplicitExit()
+    {
+        _explicitExit = true;
+        Close();
     }
 
     private void SetBackgroundEnabled(bool enabled)

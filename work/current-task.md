@@ -1,29 +1,30 @@
-# Current task — P15 redacted anomaly and repair gates
+# Current task — P16 interactive activation readiness
 
-- Tier: Standard; any automatic code merge/release activation remains High and gated
-- Disposition: APPROVE for evidence generation, deterministic policy, workflow definition, and local tests
-- Status: Complete locally; all external activation remains gated
+- Tier: Critical
+- Disposition: APPROVE for disposable GUI/updater/workflow simulation; real account and remote activation remain gated
+- Status: Complete locally; real-account and remote activation gated
 
 ## Objective
 
-Create privacy-safe anomaly evidence and deterministic repair eligibility gates. Low/Medium source/parser defects may produce a review artifact only after reproducible fixtures and offline gates; Critical account, persistence, updater, permission, and release changes must never be auto-approved.
+Directly exercise the remaining activation blockers without reading real user state: isolated GUI lifecycle, two-process exclusion, tray close/exit, manual/automatic operation ownership, and the exact production updater process-exit/copy/health/restart/rollback script.
 
 ## Preserve
 
-All P10-P14 safety evidence, source attribution, recall, privacy, attempt isolation, rollback, and explicit activation boundaries.
+All P10-P15 safety evidence, source attribution, privacy, attempt isolation, rollback, default-disabled automation, and explicit activation boundaries.
 
 ## Validation plan
 
-- Generate evidence containing correlation ID, source health/counts, payload hashes, parser/client version, and policy decision without raw payloads or account fields.
-- Classify repair eligibility fail-closed: only source/parser diagnostics with fixtures may be suggested; account, attempt/history migration, updater, permissions, workflow activation, and release are blocked from automatic approval.
-- Test deterministic JSON, privacy scan, repeated-evidence grouping, and critical-boundary rejection.
-- Add review-only workflow scaffolding without issue creation, write permission, merge, push, release, or schedule activation.
-- Re-run build/self-test/offline/live gates and document remaining activation blockers.
+- Add an explicit absolute `--data-dir` boundary and network-free disposable GUI smoke mode.
+- Exercise first/second-process behavior and tray create/hide/explicit-exit against synthetic state.
+- Extract the exact updater script builder without changing production semantics; run successful and injected-failure scenarios against a disposable packaged installation.
+- Verify process exit/restart, health exit code, touched-file rollback, unrelated-file preservation, and external synthetic-state preservation.
+- Rebuild/package/self-test/update-health/live completeness/diff check after repairs.
+- Do not read real user state, use a real Hive ID, send redemption requests, replace the installed app, or activate remote workflows/releases until gates pass.
 
 ## Rollback
 
-Evidence uses synthetic/redacted data only. Source remains recoverable against Git `8b64287`; no real installation or user state will be modified.
+All GUI, package, logs, and state use unique temporary directories. Rollback points are Git `d8b5218` and disposable pre-test file hashes.
 
 ## Result
 
-Completed locally. Evidence grouping/privacy and repair eligibility gates are TESTED; remote workflow/AI/merge/release paths are NOT TESTED and inactive. See [`P15-001-anomaly-repair-gates-result.md`](P15-001-anomaly-repair-gates-result.md).
+Completed locally. Disposable GUI/two-process and exact production updater success/rollback paths are TESTED. Real Hive redemption and remote activation remain NOT TESTED and gated. See [`P16-001-interactive-activation-readiness-result.md`](P16-001-interactive-activation-readiness-result.md).

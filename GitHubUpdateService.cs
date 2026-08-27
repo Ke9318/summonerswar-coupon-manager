@@ -94,10 +94,11 @@ public sealed class GitHubUpdateService
         var exePath = Environment.ProcessPath ??
                       Path.Combine(appDir, "SWCouponManager.exe");
         var pid = Environment.ProcessId;
-        var logPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "SWCouponManager",
-            "update.log");
+        var logPath = Environment.GetEnvironmentVariable("SWCM_UPDATE_TEST_LOG_PATH") ??
+            Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "SWCouponManager",
+                "update.log");
 
         // 종료 후 교체가 가능한 위치인지 미리 확인한다.
         var writeProbe = Path.Combine(appDir, ".update-write-test");
@@ -105,6 +106,10 @@ public sealed class GitHubUpdateService
         File.Delete(writeProbe);
 
         var script = Path.Combine(tempRoot, "apply-update.ps1");
+        var testRestartArgs = Environment.GetEnvironmentVariable("SWCM_UPDATE_TEST_RESTART_ARGS") ?? "";
+        var injectPostCopyFailure = string.Equals(
+            Environment.GetEnvironmentVariable("SWCM_UPDATE_TEST_INJECT_POST_COPY_FAILURE"),
+            "1", StringComparison.Ordinal);
         var ps = $$"""
         $ErrorActionPreference = 'Stop'
         $pidToWait = {{pid}}
@@ -114,6 +119,8 @@ public sealed class GitHubUpdateService
         $log = '{{EscapePs(logPath)}}'
         $backup = Join-Path '{{EscapePs(tempRoot)}}' 'backup'
         $expectedVersion = '{{EscapePs(update.Version.ToString(3))}}'
+        $restartArgs = '{{EscapePs(testRestartArgs)}}'
+        $injectPostCopyFailure = ${{{injectPostCopyFailure.ToString().ToLowerInvariant()}}}
         $backupReady = $false
 
         function Write-UpdateLog([string]$message) {
@@ -161,6 +168,7 @@ public sealed class GitHubUpdateService
             }
           }
           if ($null -ne $lastError) { throw $lastError }
+          if ($injectPostCopyFailure) { throw 'synthetic post-copy failure' }
           if (-not (Test-Path -LiteralPath $exe)) { throw "실행 파일이 없습니다: $exe" }
 
           $health = Start-Process -FilePath $exe -WorkingDirectory $dest -ArgumentList '--update-health-check', '--expected-version', $expectedVersion -Wait -PassThru
@@ -168,12 +176,17 @@ public sealed class GitHubUpdateService
             throw "새 버전 상태 검사 실패. 종료 코드: $($health.ExitCode)"
           }
 
-          $started = Start-Process -FilePath $exe -WorkingDirectory $dest -PassThru
+          if ([string]::IsNullOrWhiteSpace($restartArgs)) {
+            $started = Start-Process -FilePath $exe -WorkingDirectory $dest -PassThru
+          } else {
+            $started = Start-Process -FilePath $exe -WorkingDirectory $dest -ArgumentList $restartArgs -PassThru
+          }
           Start-Sleep -Seconds 2
           if ($started.HasExited) {
             throw "새 프로그램이 즉시 종료되었습니다. 종료 코드: $($started.ExitCode)"
           }
           Write-UpdateLog "업데이트 완료, 새 프로세스 ID: $($started.Id)"
+          Write-UpdateLog "UPDATE_COMPLETE processId=$($started.Id)"
         } catch {
           Write-UpdateLog "업데이트 실패: $($_ | Out-String)"
           try {
@@ -191,8 +204,13 @@ public sealed class GitHubUpdateService
                 }
               }
               Write-UpdateLog '기존 설치 파일 복원 완료'
+              Write-UpdateLog 'ROLLBACK_COMPLETE'
               if (Test-Path -LiteralPath $exe) {
-                Start-Process -FilePath $exe -WorkingDirectory $dest | Out-Null
+                if ([string]::IsNullOrWhiteSpace($restartArgs)) {
+                  Start-Process -FilePath $exe -WorkingDirectory $dest | Out-Null
+                } else {
+                  Start-Process -FilePath $exe -WorkingDirectory $dest -ArgumentList $restartArgs | Out-Null
+                }
               }
             }
           } catch {

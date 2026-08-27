@@ -2,9 +2,9 @@
 
 ## Highest priority
 
-### Critical — production updater process-exit/restart integration test
+### Critical — real Hive contract and remote activation
 
-The 1.5.0 package transaction now passes disposable successful replacement, health validation, unrelated-file/external-state preservation, and injected post-copy byte-for-byte rollback. The remaining gate is the exact production PowerShell process-exit/restart path with a disposable GUI process. Do not publish `v1.5.0` until that path and interactive tray/WebView cancellation are directly exercised.
+The exact production PowerShell updater now passes disposable process-exit, successful health/restart, injected post-copy failure, byte-for-byte rollback, and unrelated-file preservation. Before publishing `v1.5.0`, obtain explicit authority for a safe test account and directly exercise the real WebView/Hive redemption contract plus cancellation. Remote push, workflow execution, schedule, tag, release, and installed replacement remain separate activation steps.
 
 ## Later
 
