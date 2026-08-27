@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 
 namespace SWCouponManager;
 
@@ -36,5 +37,34 @@ internal sealed class TrustedManifestRemoteClient
         if (!string.Equals(checksumBefore.Trim(), checksumAfter.Trim(), StringComparison.Ordinal))
             throw new IOException("remote manifest 게시가 진행 중이므로 이번 주기를 건너뜁니다.");
         return TrustedCandidateManifestService.ParseAndValidate(json, checksumAfter, clientVersion, now);
+    }
+
+    internal static async Task<int> RunGateAsync(string[] args)
+    {
+        try
+        {
+            var outputIndex = Array.FindIndex(args, arg => arg.Equals("--output", StringComparison.OrdinalIgnoreCase));
+            if (outputIndex < 0 || outputIndex + 1 >= args.Length || !Path.IsPathFullyQualified(args[outputIndex + 1]))
+                throw new ArgumentException("--output 절대 경로가 필요합니다.");
+            var version = typeof(TrustedManifestRemoteClient).Assembly.GetName().Version ?? new Version(1, 0, 0);
+            var manifest = await new TrustedManifestRemoteClient().FetchAsync(version, DateTimeOffset.UtcNow, CancellationToken.None);
+            var redacted = JsonSerializer.Serialize(new
+            {
+                manifest.SchemaVersion,
+                manifest.GeneratedAt,
+                manifest.ExpiresAt,
+                manifest.MinimumClientVersion,
+                candidateCount = manifest.Candidates.Count,
+                sources = manifest.Candidates.SelectMany(candidate => candidate.Sources)
+                    .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(source => source).ToList()
+            });
+            File.WriteAllText(args[outputIndex + 1], redacted);
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return 1;
+        }
     }
 }

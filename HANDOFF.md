@@ -18,5 +18,6 @@ P14 result: [`work/P14-001-disposable-e2e-result.md`](work/P14-001-disposable-e2
 P15 result: [`work/P15-001-anomaly-repair-gates-result.md`](work/P15-001-anomaly-repair-gates-result.md)
 
 P16 result: [`work/P16-001-interactive-activation-readiness-result.md`](work/P16-001-interactive-activation-readiness-result.md)
+P17 progress: [`work/P17-001-remote-activation-progress.md`](work/P17-001-remote-activation-progress.md)
 
 Next action: separately authorize remote push/workflow execution, then schedule/tag/release/installed activation only in acceptance-gate order.

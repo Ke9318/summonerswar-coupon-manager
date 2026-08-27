@@ -19,6 +19,8 @@ internal static class Program
             return AnomalyEvidenceService.RunAsync(args).GetAwaiter().GetResult();
         if (args.Contains("--disposable-update-client", StringComparer.OrdinalIgnoreCase))
             return RunDisposableUpdateClient(args);
+        if (args.Contains("--remote-manifest-gate", StringComparer.OrdinalIgnoreCase))
+            return TrustedManifestRemoteClient.RunGateAsync(args).GetAwaiter().GetResult();
 
         try
         {
