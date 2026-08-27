@@ -695,6 +695,18 @@ internal static class SelfTest
 
             Require(result == new AutomaticCycleResult(3, 2, 1),
                 "automatic cycle 결과/실패 격리 집계 실패");
+            var limitedState = new AppState { Accounts = [new Account { Id = "limited", HiveId = "synthetic", Server = "global" }] };
+            var limitedStorage = new AppStorage(Path.Combine(root, "limited"));
+            var limitedCalls = 0;
+            var limited = new TrustedAutomaticCycle(limitedState, limitedStorage, () => now)
+                .ExecuteAsync(manifest, (_, submitted, _, _) =>
+                {
+                    limitedCalls++;
+                    submitted();
+                    return Task.FromResult(("success", "limited"));
+                }, CancellationToken.None, maxItems: 1).GetAwaiter().GetResult();
+            Require(limited == new AutomaticCycleResult(1, 1, 0) && limitedCalls == 1,
+                "approved live one hard limit가 1개를 초과함");
             var restored = storage.Load();
             Require(restored.History[account.Id].Keys.Order().SequenceEqual(["SUCCESS1", "SUCCESS2"]),
                 "automatic cycle terminal history 저장 또는 실패 격리 실패");

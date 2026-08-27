@@ -45,6 +45,7 @@ internal static class Program
             AppDomain.CurrentDomain.UnhandledException += (_, e) =>
                 CrashReporter.Report(e.ExceptionObject as Exception ?? new Exception("알 수 없는 오류"));
             var smoke = args.Contains("--gui-smoke-test", StringComparer.OrdinalIgnoreCase);
+            var approvedLiveOne = args.Contains("--approved-live-redemption-one", StringComparer.OrdinalIgnoreCase);
             AppStorage? smokeStorage = null;
             if (smoke)
             {
@@ -57,7 +58,19 @@ internal static class Program
                 syntheticState.BackgroundAutomationPaused = false;
                 smokeStorage.Save(syntheticState);
             }
-            var form = smoke ? new MainForm(smokeStorage!, suppressStartupNetwork: true) : new MainForm();
+            string? liveResultPath = null;
+            if (approvedLiveOne)
+            {
+                var resultIndex = Array.FindIndex(args, arg => arg.Equals("--result-file", StringComparison.OrdinalIgnoreCase));
+                if (resultIndex < 0 || resultIndex + 1 >= args.Length || !Path.IsPathFullyQualified(args[resultIndex + 1]))
+                    throw new ArgumentException("승인된 live one 테스트에는 절대 --result-file 경로가 필요합니다.");
+                liveResultPath = Path.GetFullPath(args[resultIndex + 1]);
+            }
+            var form = smoke
+                ? new MainForm(smokeStorage!, suppressStartupNetwork: true)
+                : approvedLiveOne
+                    ? new MainForm(new AppStorage(), suppressStartupNetwork: false, approvedLiveOne: true, resultPath: liveResultPath)
+                    : new MainForm();
             if (smoke)
             {
                 var holdIndex = Array.FindIndex(args, arg => arg.Equals("--gui-smoke-hold-ms", StringComparison.OrdinalIgnoreCase));
@@ -73,7 +86,7 @@ internal static class Program
                 timer.Start();
             }
             Application.Run(form);
-            return 0;
+            return approvedLiveOne ? form.ApprovedLiveOneExitCode : 0;
         }
         catch (Exception ex)
         {

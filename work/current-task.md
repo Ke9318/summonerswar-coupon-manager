@@ -27,4 +27,4 @@ All GUI, package, logs, and state use unique temporary directories. Rollback poi
 
 ## Result
 
-Completed locally. Disposable GUI/two-process and exact production updater success/rollback paths are TESTED. Real Hive redemption and remote activation remain NOT TESTED and gated. See [`P16-001-interactive-activation-readiness-result.md`](P16-001-interactive-activation-readiness-result.md).
+Completed locally. Disposable GUI/two-process and exact production updater success/rollback paths are TESTED. The approved live-one path was exercised but correctly sent no request because no pending trusted candidate exists; real Hive redemption remains NOT TESTED. Remote activation remains gated. See [`P16-001-interactive-activation-readiness-result.md`](P16-001-interactive-activation-readiness-result.md).

@@ -60,9 +60,11 @@ public sealed class MainForm : Form
     private BackgroundAgentScheduler? _backgroundScheduler;
     private bool _explicitExit;
 
-    public MainForm() : this(new AppStorage(), suppressStartupNetwork: false) { }
+    internal int ApprovedLiveOneExitCode { get; private set; } = 1;
 
-    internal MainForm(AppStorage storage, bool suppressStartupNetwork)
+    public MainForm() : this(new AppStorage(), suppressStartupNetwork: false, approvedLiveOne: false, resultPath: null) { }
+
+    internal MainForm(AppStorage storage, bool suppressStartupNetwork, bool approvedLiveOne = false, string? resultPath = null)
     {
         _storage = storage;
         _state = _storage.Load();
@@ -89,6 +91,12 @@ public sealed class MainForm : Form
         {
             try
             {
+                if (approvedLiveOne)
+                {
+                    await RunApprovedLiveOneAsync(resultPath);
+                    RequestExplicitExit();
+                    return;
+                }
                 if (suppressStartupNetwork)
                 {
                     if (_state.BackgroundAutomationEnabled) EnsureTrayOwner();
@@ -283,6 +291,67 @@ public sealed class MainForm : Form
             if (_availableUpdate is not null)
                 await _updates.DownloadAndRestartAsync(_availableUpdate, SetStatus);
         };
+    }
+
+    private async Task RunApprovedLiveOneAsync(string? resultPath)
+    {
+        string? attemptedCode = null;
+        string? finalStatus = null;
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            // Cloud publication health must not inherit a local account application's
+            // historical source baselines; planning still uses the real local state below.
+            var scan = await _sources.ScanAsync(new AppState());
+            var manifest = CloudWatcher.BuildManifest(scan, now,
+                _updates.CurrentVersion.ToString(3));
+            var preview = new TrustedAutomaticPlanner(_state).Build(manifest);
+            if (preview.Items.Count == 0)
+            {
+                ApprovedLiveOneExitCode = 4;
+                var reason = preview.SkippedAccounts == _state.Accounts.Count
+                    ? "NoEligibleSelectedAccount"
+                    : "NoPendingTrustedCandidate";
+                WriteApprovedLiveResult(resultPath, null, null, new AutomaticCycleResult(0, 0, 0), reason);
+                return;
+            }
+            await EnsureWebViewAsync();
+            var cycle = new TrustedAutomaticCycle(_state, _storage);
+            var result = await cycle.ExecuteAsync(manifest, async (automatic, submitted, correlationId, token) =>
+            {
+                var item = automatic.Redemption;
+                attemptedCode = item.Code;
+                void Progress(string stage) => WriteRedemptionProgress(item, stage, correlationId);
+                Progress($"approved live one · {string.Join(",", automatic.Candidate.Sources)}");
+                var response = await RedeemAsync(item, Progress, token, submitted);
+                finalStatus = response.status;
+                return response;
+            }, CancellationToken.None, maxItems: 1);
+            ApprovedLiveOneExitCode = result.Planned == 0 ? 4 : result.Completed == 1 ? 0 : 5;
+            WriteApprovedLiveResult(resultPath, attemptedCode, finalStatus, result);
+        }
+        catch (Exception ex)
+        {
+            ApprovedLiveOneExitCode = 1;
+            WriteApprovedLiveResult(resultPath, attemptedCode, "error", new AutomaticCycleResult(0, 0, 1),
+                ex.GetType().Name);
+        }
+    }
+
+    private static void WriteApprovedLiveResult(
+        string? path, string? code, string? status, AutomaticCycleResult result, string? errorType = null)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return;
+        var json = JsonSerializer.Serialize(new
+        {
+            code,
+            status,
+            result.Planned,
+            result.Completed,
+            result.Failed,
+            errorType
+        });
+        File.WriteAllText(path, json);
     }
 
     internal void RequestExplicitExit()

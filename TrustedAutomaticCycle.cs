@@ -18,14 +18,16 @@ internal sealed class TrustedAutomaticCycle
     internal async Task<AutomaticCycleResult> ExecuteAsync(
         TrustedCandidateManifest manifest,
         Func<AutomaticWorkItem, Action, string, CancellationToken, Task<(string status, string message)>> adapter,
-        CancellationToken ct)
+        CancellationToken ct,
+        int? maxItems = null)
     {
         var plan = new TrustedAutomaticPlanner(_state, _clock).Build(manifest);
+        var selectedItems = maxItems is null ? plan.Items : plan.Items.Take(Math.Max(0, maxItems.Value)).ToList();
         var coordinator = new RedemptionAttemptCoordinator(_state, _storage, _clock);
         var completed = 0;
         var failed = 0;
 
-        foreach (var item in plan.Items)
+        foreach (var item in selectedItems)
         {
             ct.ThrowIfCancellationRequested();
             try
@@ -44,7 +46,7 @@ internal sealed class TrustedAutomaticCycle
             }
         }
 
-        return new AutomaticCycleResult(plan.Items.Count, completed, failed);
+        return new AutomaticCycleResult(selectedItems.Count, completed, failed);
     }
 
     private void Record(WorkItem item, string status, string message)
