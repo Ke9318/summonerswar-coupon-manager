@@ -327,7 +327,7 @@ public sealed class MainForm : Form
             {
                 if (allowTerminalOverride)
                 {
-                    await RunApprovedTerminalRetryOneAsync(manifest, resultPath);
+                    await RunApprovedTerminalRetryOneAsync(manifest, resultPath, approvedAccountCount);
                     return;
                 }
                 ApprovedLiveOneExitCode = 4;
@@ -360,12 +360,13 @@ public sealed class MainForm : Form
         }
     }
 
-    private async Task RunApprovedTerminalRetryOneAsync(TrustedCandidateManifest manifest, string? resultPath)
+    private async Task RunApprovedTerminalRetryOneAsync(TrustedCandidateManifest manifest, string? resultPath,
+        int approvedAccountCount)
     {
         var duplicateIds = _state.Accounts.GroupBy(account => account.Id, StringComparer.OrdinalIgnoreCase)
             .Where(group => group.Count() > 1).Select(group => group.Key)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var recovery = (from account in _state.Accounts
+        var recoveries = (from account in _state.Accounts
                         where account.Selected && !string.IsNullOrWhiteSpace(account.Id) &&
                               !string.IsNullOrWhiteSpace(account.HiveId) && IsSupportedServer(account.Server) &&
                               !duplicateIds.Contains(account.Id)
@@ -373,8 +374,8 @@ public sealed class MainForm : Form
                         where _state.History.TryGetValue(account.Id, out var perAccount) &&
                               perAccount.TryGetValue(candidate.Code, out var record) &&
                               IsCompletedStatus(record.Status)
-                        select new AutomaticWorkItem(account, candidate)).FirstOrDefault();
-        if (recovery is null)
+                        select new AutomaticWorkItem(account, candidate)).Take(approvedAccountCount).ToList();
+        if (recoveries.Count != approvedAccountCount)
         {
             ApprovedLiveOneExitCode = 4;
             WriteApprovedLiveResult(resultPath, null, null, new AutomaticCycleResult(0, 0, 0),
@@ -382,30 +383,41 @@ public sealed class MainForm : Form
             return;
         }
 
-        var item = recovery.Redemption;
-        var correlationId = "approved-manual-one-" + Guid.NewGuid().ToString("N");
-        string? status = null;
+        string? attemptedCode = null;
+        var statuses = new List<string>();
+        var completed = 0;
+        var failed = 0;
         try
         {
             await EnsureWebViewAsync();
-            void Progress(string stage) => WriteRedemptionProgress(item, stage, correlationId);
-            Progress($"approved terminal retry one · {string.Join(",", recovery.Candidate.Sources)}");
-            var response = await RedeemAsync(item, Progress, CancellationToken.None);
-            status = response.status;
-            if (IsCompletedStatus(status))
+            foreach (var recovery in recoveries)
             {
-                Record(item, status, response.message);
-                _storage.Save(_state);
+                var item = recovery.Redemption;
+                attemptedCode = item.Code;
+                var correlationId = "approved-manual-one-" + Guid.NewGuid().ToString("N");
+                void Progress(string stage) => WriteRedemptionProgress(item, stage, correlationId);
+                Progress($"approved terminal retry one · {string.Join(",", recovery.Candidate.Sources)}");
+                var response = await RedeemAsync(item, Progress, CancellationToken.None);
+                statuses.Add(response.status);
+                if (IsCompletedStatus(response.status))
+                {
+                    completed++;
+                    Record(item, response.status, response.message);
+                    _storage.Save(_state);
+                }
+                else failed++;
             }
-            ApprovedLiveOneExitCode = IsCompletedStatus(status) ? 0 : 5;
-            WriteApprovedLiveResult(resultPath, item.Code, status,
-                new AutomaticCycleResult(1, IsCompletedStatus(status) ? 1 : 0, IsCompletedStatus(status) ? 0 : 1));
+            var aggregateStatus = statuses.Distinct(StringComparer.OrdinalIgnoreCase).Count() == 1
+                ? statuses[0] : "mixed";
+            ApprovedLiveOneExitCode = completed == approvedAccountCount ? 0 : 5;
+            WriteApprovedLiveResult(resultPath, attemptedCode, aggregateStatus,
+                new AutomaticCycleResult(approvedAccountCount, completed, failed));
         }
         catch (Exception ex)
         {
             ApprovedLiveOneExitCode = 1;
-            WriteApprovedLiveResult(resultPath, item.Code, status ?? "error",
-                new AutomaticCycleResult(1, 0, 1), ex.GetType().Name);
+            WriteApprovedLiveResult(resultPath, attemptedCode, statuses.LastOrDefault() ?? "error",
+                new AutomaticCycleResult(approvedAccountCount, completed, failed + 1), ex.GetType().Name);
         }
     }
 
