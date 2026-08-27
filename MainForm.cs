@@ -66,7 +66,8 @@ public sealed class MainForm : Form
     public MainForm() : this(new AppStorage(), suppressStartupNetwork: false, approvedLiveOne: false, resultPath: null) { }
 
     internal MainForm(AppStorage storage, bool suppressStartupNetwork, bool approvedLiveOne = false,
-        string? resultPath = null, bool allowTerminalOverride = false)
+        string? resultPath = null, bool allowTerminalOverride = false, string? approvedCode = null,
+        int approvedAccountCount = 1)
     {
         _storage = storage;
         _state = _storage.Load();
@@ -95,7 +96,7 @@ public sealed class MainForm : Form
             {
                 if (approvedLiveOne)
                 {
-                    await RunApprovedLiveOneAsync(resultPath, allowTerminalOverride);
+                    await RunApprovedLiveOneAsync(resultPath, allowTerminalOverride, approvedCode, approvedAccountCount);
                     RequestExplicitExit();
                     return;
                 }
@@ -295,7 +296,8 @@ public sealed class MainForm : Form
         };
     }
 
-    private async Task RunApprovedLiveOneAsync(string? resultPath, bool allowTerminalOverride)
+    private async Task RunApprovedLiveOneAsync(string? resultPath, bool allowTerminalOverride, string? approvedCode,
+        int approvedAccountCount)
     {
         string? attemptedCode = null;
         string? finalStatus = null;
@@ -307,6 +309,19 @@ public sealed class MainForm : Form
             var scan = await _sources.ScanAsync(new AppState());
             var manifest = CloudWatcher.BuildManifest(scan, now,
                 _updates.CurrentVersion.ToString(3));
+            if (!string.IsNullOrWhiteSpace(approvedCode))
+            {
+                manifest.Candidates = manifest.Candidates
+                    .Where(candidate => candidate.Code.Equals(approvedCode, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                if (manifest.Candidates.Count != 1)
+                {
+                    ApprovedLiveOneExitCode = 4;
+                    WriteApprovedLiveResult(resultPath, approvedCode, null,
+                        new AutomaticCycleResult(0, 0, 0), "RequestedCodeNotTrusted");
+                    return;
+                }
+            }
             var preview = new TrustedAutomaticPlanner(_state).Build(manifest);
             if (preview.Items.Count == 0)
             {
@@ -333,8 +348,8 @@ public sealed class MainForm : Form
                 var response = await RedeemAsync(item, Progress, token, submitted);
                 finalStatus = response.status;
                 return response;
-            }, CancellationToken.None, maxItems: 1);
-            ApprovedLiveOneExitCode = result.Planned == 0 ? 4 : result.Completed == 1 ? 0 : 5;
+            }, CancellationToken.None, maxItems: approvedAccountCount);
+            ApprovedLiveOneExitCode = result.Planned == 0 ? 4 : result.Completed == approvedAccountCount ? 0 : 5;
             WriteApprovedLiveResult(resultPath, attemptedCode, finalStatus, result);
         }
         catch (Exception ex)

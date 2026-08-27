@@ -20,5 +20,6 @@ P15 result: [`work/P15-001-anomaly-repair-gates-result.md`](work/P15-001-anomaly
 P16 result: [`work/P16-001-interactive-activation-readiness-result.md`](work/P16-001-interactive-activation-readiness-result.md)
 P17 progress: [`work/P17-001-remote-activation-progress.md`](work/P17-001-remote-activation-progress.md)
 P17 result: [`work/P17-001-remote-activation-result.md`](work/P17-001-remote-activation-result.md)
+P17 two-account probe: [`work/P17-002-live-two-account-coupon-result.md`](work/P17-002-live-two-account-coupon-result.md)
 
 Next action: observe the first successful scheduled cloud-watcher run, then close P17.

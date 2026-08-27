@@ -63,18 +63,32 @@ internal static class Program
                 smokeStorage.Save(syntheticState);
             }
             string? liveResultPath = null;
+            string? approvedCode = null;
+            var approvedAccountCount = 1;
             if (approvedLiveOne)
             {
                 var resultIndex = Array.FindIndex(args, arg => arg.Equals("--result-file", StringComparison.OrdinalIgnoreCase));
                 if (resultIndex < 0 || resultIndex + 1 >= args.Length || !Path.IsPathFullyQualified(args[resultIndex + 1]))
                     throw new ArgumentException("승인된 live one 테스트에는 절대 --result-file 경로가 필요합니다.");
                 liveResultPath = Path.GetFullPath(args[resultIndex + 1]);
+                var codeIndex = Array.FindIndex(args, arg => arg.Equals("--approved-code", StringComparison.OrdinalIgnoreCase));
+                if (codeIndex >= 0)
+                {
+                    if (codeIndex + 1 >= args.Length)
+                        throw new ArgumentException("--approved-code 값이 필요합니다.");
+                    approvedCode = AttemptJournal.NormalizeCode(args[codeIndex + 1]);
+                }
+                var countIndex = Array.FindIndex(args, arg => arg.Equals("--approved-account-count", StringComparison.OrdinalIgnoreCase));
+                if (countIndex >= 0 && (countIndex + 1 >= args.Length ||
+                    !int.TryParse(args[countIndex + 1], out approvedAccountCount) || approvedAccountCount is < 1 or > 2))
+                    throw new ArgumentException("--approved-account-count는 1 또는 2여야 합니다.");
             }
             var form = smoke
                 ? new MainForm(smokeStorage!, suppressStartupNetwork: true)
                 : approvedLiveOne
                     ? new MainForm(new AppStorage(), suppressStartupNetwork: false, approvedLiveOne: true,
-                        resultPath: liveResultPath, allowTerminalOverride: allowTerminalOverride)
+                        resultPath: liveResultPath, allowTerminalOverride: allowTerminalOverride,
+                        approvedCode: approvedCode, approvedAccountCount: approvedAccountCount)
                     : new MainForm();
             if (smoke)
             {
