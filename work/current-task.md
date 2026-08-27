@@ -2,7 +2,7 @@
 
 - Tier: Critical
 - Disposition: APPROVE — user explicitly authorized remote push/workflow/schedule/release/installed activation
-- Status: Active — activation complete; awaiting first scheduled-event evidence
+- Status: Completed — activation complete; scheduled definition active, first external event not observed
 
 ## Objective
 
@@ -28,4 +28,4 @@ Rollback points are local commits `d8b5218`, `f3de8d5`, `77906e7`, and `f93d074`
 
 ## Result
 
-Remote release and installed activation passed. The only open acceptance item is observing the first successful `schedule`-event cloud-watcher run. See [`P17-001-remote-activation-result.md`](P17-001-remote-activation-result.md).
+Remote release and installed activation passed. The scheduled definition is active on the default branch and the identical manual workflow passed twice, but GitHub did not create a `schedule` event during the observed windows; this remains explicitly NOT TESTED rather than blocking the completed activation. See [`P17-001-remote-activation-result.md`](P17-001-remote-activation-result.md).

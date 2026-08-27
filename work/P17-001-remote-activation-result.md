@@ -24,6 +24,6 @@
 - TESTED: release workflow and public ZIP/checksum publication (`33032126053`).
 - TESTED: public remote package normal update and injected-failure rollback in disposable installations.
 - TESTED: installed package replacement and synthetic GUI startup.
-- PENDING: first `schedule`-event cloud-watcher run; do not treat the schedule as healthy until a successful event is observed.
+- NOT TESTED: first `schedule`-event cloud-watcher run. The workflow, default-branch definition, and repository Actions policy are active, and equivalent manual runs `33031875743` and `33032863387` passed, but GitHub emitted no scheduled run during the observed quarter-hour and offset windows.
 
-The initial `*/15` definition produced no schedule event while the workflow and repository Actions policy were both active. Following GitHub's documented recommendation to avoid common high-load boundaries, the same 15-minute cadence was offset to minutes 13, 28, 43, and 58 pending direct observation.
+The initial `*/15` definition produced no schedule event while the workflow and repository Actions policy were both active. Following GitHub's documented recommendation to avoid common high-load boundaries, the same 15-minute cadence was offset to minutes 13, 28, 43, and 58. The first offset boundary also produced no immediately observable event; schedule health therefore remains NOT TESTED and is not inferred from manual success.
