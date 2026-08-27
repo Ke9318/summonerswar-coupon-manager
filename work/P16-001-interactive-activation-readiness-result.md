@@ -11,12 +11,13 @@ Disposable GUI/process and exact production updater gates passed without reading
 - TESTED: exact `DownloadAndRestartAsync` download/checksum/stage/PowerShell path over localhost; successful copy, packaged health check, synthetic GUI restart, `UPDATE_COMPLETE`, unrelated-file preservation.
 - TESTED: exact updater script with injected post-copy failure; `ROLLBACK_COMPLETE`; all disposable installation files restored byte-for-byte; unrelated file preserved; rollback restart used synthetic state.
 - TESTED: forced Rebuild 1.5.0 package, packaged self-test, packaged update health, and existing P10-P15 regressions.
-- NOT TESTED: real WebView/Hive redemption, interactive mouse-driven tray/menu actions, remote GitHub workflow execution, push/tag/release, recurring schedule, or installed-app replacement.
+- TESTED: with explicit user approval, the dedicated terminal-recovery command retried exactly one reference-confirmed trusted code (`12YJUSTHALFWAY`) on one eligible selected account. Hive returned `invalid`; planned 1, completed 1, failed 0, process exit 0. No account/Hive identifier was inspected or emitted, and the command was not repeated.
+- NOT TESTED: interactive mouse-driven tray/menu actions, remote GitHub workflow execution, push/tag/release, recurring schedule, or installed-app replacement.
 - TESTED: user-approved live-one entry point enforces a one-item hard limit, uses fresh cloud health separate from account state, and emits only redacted result fields. Two live planning runs made no Hive request: the first failed closed on historical source-health contamination (repaired), and the second reported `NoPendingTrustedCandidate` because all current trusted candidates were already terminal/ambiguous/backoff for the eligible selected account.
 
 ## Safety
 
-The updater test hooks are inert unless explicit `SWCM_UPDATE_TEST_*` environment variables are present. Test update logs and state are redirected to unique temporary paths. No real `%LOCALAPPDATA%\SWCouponManager` state or logs were read.
+The updater test hooks are inert unless explicit `SWCM_UPDATE_TEST_*` environment variables are present. Test update logs and state are redirected to unique temporary paths. No real `%LOCALAPPDATA%\SWCouponManager` state or logs were read. The approved Hive execution used application state internally without printing or inspecting account identity.
 
 ## Rollback
 

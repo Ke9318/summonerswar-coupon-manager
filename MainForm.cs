@@ -64,7 +64,8 @@ public sealed class MainForm : Form
 
     public MainForm() : this(new AppStorage(), suppressStartupNetwork: false, approvedLiveOne: false, resultPath: null) { }
 
-    internal MainForm(AppStorage storage, bool suppressStartupNetwork, bool approvedLiveOne = false, string? resultPath = null)
+    internal MainForm(AppStorage storage, bool suppressStartupNetwork, bool approvedLiveOne = false,
+        string? resultPath = null, bool allowTerminalOverride = false)
     {
         _storage = storage;
         _state = _storage.Load();
@@ -93,7 +94,7 @@ public sealed class MainForm : Form
             {
                 if (approvedLiveOne)
                 {
-                    await RunApprovedLiveOneAsync(resultPath);
+                    await RunApprovedLiveOneAsync(resultPath, allowTerminalOverride);
                     RequestExplicitExit();
                     return;
                 }
@@ -293,7 +294,7 @@ public sealed class MainForm : Form
         };
     }
 
-    private async Task RunApprovedLiveOneAsync(string? resultPath)
+    private async Task RunApprovedLiveOneAsync(string? resultPath, bool allowTerminalOverride)
     {
         string? attemptedCode = null;
         string? finalStatus = null;
@@ -308,6 +309,11 @@ public sealed class MainForm : Form
             var preview = new TrustedAutomaticPlanner(_state).Build(manifest);
             if (preview.Items.Count == 0)
             {
+                if (allowTerminalOverride)
+                {
+                    await RunApprovedTerminalRetryOneAsync(manifest, resultPath);
+                    return;
+                }
                 ApprovedLiveOneExitCode = 4;
                 var reason = preview.SkippedAccounts == _state.Accounts.Count
                     ? "NoEligibleSelectedAccount"
@@ -335,6 +341,55 @@ public sealed class MainForm : Form
             ApprovedLiveOneExitCode = 1;
             WriteApprovedLiveResult(resultPath, attemptedCode, "error", new AutomaticCycleResult(0, 0, 1),
                 ex.GetType().Name);
+        }
+    }
+
+    private async Task RunApprovedTerminalRetryOneAsync(TrustedCandidateManifest manifest, string? resultPath)
+    {
+        var duplicateIds = _state.Accounts.GroupBy(account => account.Id, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1).Select(group => group.Key)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var recovery = (from account in _state.Accounts
+                        where account.Selected && !string.IsNullOrWhiteSpace(account.Id) &&
+                              !string.IsNullOrWhiteSpace(account.HiveId) && IsSupportedServer(account.Server) &&
+                              !duplicateIds.Contains(account.Id)
+                        from candidate in manifest.Candidates
+                        where _state.History.TryGetValue(account.Id, out var perAccount) &&
+                              perAccount.TryGetValue(candidate.Code, out var record) &&
+                              IsCompletedStatus(record.Status)
+                        select new AutomaticWorkItem(account, candidate)).FirstOrDefault();
+        if (recovery is null)
+        {
+            ApprovedLiveOneExitCode = 4;
+            WriteApprovedLiveResult(resultPath, null, null, new AutomaticCycleResult(0, 0, 0),
+                "NoTerminalTrustedCandidate");
+            return;
+        }
+
+        var item = recovery.Redemption;
+        var correlationId = "approved-manual-one-" + Guid.NewGuid().ToString("N");
+        string? status = null;
+        try
+        {
+            await EnsureWebViewAsync();
+            void Progress(string stage) => WriteRedemptionProgress(item, stage, correlationId);
+            Progress($"approved terminal retry one · {string.Join(",", recovery.Candidate.Sources)}");
+            var response = await RedeemAsync(item, Progress, CancellationToken.None);
+            status = response.status;
+            if (IsCompletedStatus(status))
+            {
+                Record(item, status, response.message);
+                _storage.Save(_state);
+            }
+            ApprovedLiveOneExitCode = IsCompletedStatus(status) ? 0 : 5;
+            WriteApprovedLiveResult(resultPath, item.Code, status,
+                new AutomaticCycleResult(1, IsCompletedStatus(status) ? 1 : 0, IsCompletedStatus(status) ? 0 : 1));
+        }
+        catch (Exception ex)
+        {
+            ApprovedLiveOneExitCode = 1;
+            WriteApprovedLiveResult(resultPath, item.Code, status ?? "error",
+                new AutomaticCycleResult(1, 0, 1), ex.GetType().Name);
         }
     }
 

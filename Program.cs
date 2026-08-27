@@ -45,7 +45,9 @@ internal static class Program
             AppDomain.CurrentDomain.UnhandledException += (_, e) =>
                 CrashReporter.Report(e.ExceptionObject as Exception ?? new Exception("알 수 없는 오류"));
             var smoke = args.Contains("--gui-smoke-test", StringComparer.OrdinalIgnoreCase);
-            var approvedLiveOne = args.Contains("--approved-live-redemption-one", StringComparer.OrdinalIgnoreCase);
+            var allowTerminalOverride = args.Contains("--approved-live-retry-terminal-one", StringComparer.OrdinalIgnoreCase);
+            var approvedLiveOne = allowTerminalOverride ||
+                args.Contains("--approved-live-redemption-one", StringComparer.OrdinalIgnoreCase);
             AppStorage? smokeStorage = null;
             if (smoke)
             {
@@ -69,7 +71,8 @@ internal static class Program
             var form = smoke
                 ? new MainForm(smokeStorage!, suppressStartupNetwork: true)
                 : approvedLiveOne
-                    ? new MainForm(new AppStorage(), suppressStartupNetwork: false, approvedLiveOne: true, resultPath: liveResultPath)
+                    ? new MainForm(new AppStorage(), suppressStartupNetwork: false, approvedLiveOne: true,
+                        resultPath: liveResultPath, allowTerminalOverride: allowTerminalOverride)
                     : new MainForm();
             if (smoke)
             {

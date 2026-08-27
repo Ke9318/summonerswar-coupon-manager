@@ -4,7 +4,7 @@ Current task: [`work/current-task.md`](work/current-task.md)
 
 Project rules: [`PROJECT_CHARTER.md`](PROJECT_CHARTER.md) and [`AGENTS.md`](AGENTS.md)
 
-Latest milestone: P16 interactive activation readiness—completed locally; real-account and remote activation gated. See [`work/current-task.md`](work/current-task.md).
+Latest milestone: P16 activation readiness—local, updater, and one approved real Hive contract test complete; remote activation gated. See [`work/current-task.md`](work/current-task.md).
 
 Architecture: [`architecture/unattended-automation.md`](architecture/unattended-automation.md)
 
@@ -19,4 +19,4 @@ P15 result: [`work/P15-001-anomaly-repair-gates-result.md`](work/P15-001-anomaly
 
 P16 result: [`work/P16-001-interactive-activation-readiness-result.md`](work/P16-001-interactive-activation-readiness-result.md)
 
-Next action: obtain explicit safe-test-account authority for a real Hive redemption contract test, then separately authorize remote push/workflow/release activation.
+Next action: separately authorize remote push/workflow execution, then schedule/tag/release/installed activation only in acceptance-gate order.
