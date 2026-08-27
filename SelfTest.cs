@@ -131,6 +131,7 @@ internal static class SelfTest
             TestTrustedAutomaticPlanner();
             TestTrustedAutomaticCycle();
             TestTrustedManifestInbox();
+            TestTrustedManifestRemoteClient();
             TestCloudWatcherPublication();
             TestDisposableUpdateTransaction();
             TestDisposableUnattendedEndToEnd();
@@ -777,6 +778,28 @@ internal static class SelfTest
             Require(changedDuringRead, "manifest 게시 중 checksum 변경을 허용함");
         }
         finally { try { Directory.Delete(root, true); } catch { } }
+    }
+
+    private static void TestTrustedManifestRemoteClient()
+    {
+        var now = new DateTimeOffset(2026, 8, 27, 3, 0, 0, TimeSpan.Zero);
+        var json = $$"""
+        {"schemaVersion":1,"generatedAt":"{{now:O}}","expiresAt":"{{now.AddHours(1):O}}","minimumClientVersion":"1.5.0","candidates":[{"code":"REMOTE1","sources":["Synthetic"],"firstObservedAt":"{{now:O}}","lastObservedAt":"{{now:O}}","evidenceHashes":["{{new string('e', 64)}}"],"policyId":"recall-explicit-v1"}]}
+        """;
+        var checksum = TrustedCandidateManifestService.ComputeSha256(json);
+        var client = new TrustedManifestRemoteClient((url, _) => Task.FromResult(
+            url == TrustedManifestRemoteClient.ManifestUrl ? json : checksum));
+        var manifest = client.FetchAsync(new Version(1, 5, 0), now, CancellationToken.None)
+            .GetAwaiter().GetResult();
+        Require(manifest.Candidates.Single().Code == "REMOTE1", "remote manifest 검증/읽기 실패");
+
+        var checksumReads = 0;
+        var changing = new TrustedManifestRemoteClient((url, _) => Task.FromResult(
+            url == TrustedManifestRemoteClient.ManifestUrl ? json : ++checksumReads == 1 ? checksum : new string('0', 64)));
+        var rejected = false;
+        try { changing.FetchAsync(new Version(1, 5, 0), now, CancellationToken.None).GetAwaiter().GetResult(); }
+        catch (IOException) { rejected = true; }
+        Require(rejected, "remote manifest checksum 변경 중 읽기를 허용함");
     }
 
     private static void TestCloudWatcherPublication()

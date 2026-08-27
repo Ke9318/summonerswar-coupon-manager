@@ -21,6 +21,7 @@ public sealed class MainForm : Form
     private readonly AppStorage _storage;
     private readonly CouponSourceService _sources = new();
     private readonly GitHubUpdateService _updates = new();
+    private readonly TrustedManifestRemoteClient _remoteManifest = new();
     private AppState _state;
 
     private readonly DataGridView _accounts = new();
@@ -501,11 +502,21 @@ public sealed class MainForm : Form
         try
         {
             var manifestPath = Path.Combine(_storage.DataDir, "candidate-manifest.json");
-            var manifest = TrustedManifestInbox.TryRead(
-                manifestPath,
-                manifestPath + ".sha256",
-                _updates.CurrentVersion,
-                DateTimeOffset.UtcNow);
+            TrustedCandidateManifest? manifest = null;
+            try
+            {
+                manifest = await _remoteManifest.FetchAsync(
+                    _updates.CurrentVersion, DateTimeOffset.UtcNow, ct);
+                CloudWatcher.PublishAtomically(manifest, _storage.DataDir);
+            }
+            catch
+            {
+                manifest = TrustedManifestInbox.TryRead(
+                    manifestPath,
+                    manifestPath + ".sha256",
+                    _updates.CurrentVersion,
+                    DateTimeOffset.UtcNow);
+            }
             if (manifest is null)
             {
                 SetStatus("자동 실행 대기 · trusted manifest 없음");

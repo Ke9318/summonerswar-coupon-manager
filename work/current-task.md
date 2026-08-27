@@ -1,30 +1,31 @@
-# Current task — P16 interactive activation readiness
+# Current task — P17 remote activation
 
 - Tier: Critical
-- Disposition: APPROVE for disposable GUI/updater/workflow simulation; real account and remote activation remain gated
-- Status: Complete locally and real Hive contract tested once; remote activation gated
+- Disposition: APPROVE — user explicitly authorized remote push/workflow/schedule/release/installed activation
+- Status: Active
 
 ## Objective
 
-Directly exercise the remaining activation blockers without reading real user state: isolated GUI lifecycle, two-process exclusion, tray close/exit, manual/automatic operation ownership, and the exact production updater process-exit/copy/health/restart/rollback script.
+Activate in gate order: push reviewed source, manually run cloud watcher, verify public manifest through the production remote client, observe scheduled health, publish `v1.5.0`, verify remote package update in disposable installation, then update the installed app without exposing account state.
 
 ## Preserve
 
-All P10-P15 safety evidence, source attribution, privacy, attempt isolation, rollback, default-disabled automation, and explicit activation boundaries.
+All P10-P16 evidence, source attribution, privacy, attempt isolation, rollback, default-disabled automation, real one-shot Hive contract, and installed state separation.
 
 ## Validation plan
 
-- Add an explicit absolute `--data-dir` boundary and network-free disposable GUI smoke mode.
-- Exercise first/second-process behavior and tray create/hide/explicit-exit against synthetic state.
-- Extract the exact updater script builder without changing production semantics; run successful and injected-failure scenarios against a disposable packaged installation.
-- Verify process exit/restart, health exit code, touched-file rollback, unrelated-file preservation, and external synthetic-state preservation.
-- Rebuild/package/self-test/update-health/live completeness/diff check after repairs.
-- Do not read real user state, use a real Hive ID, send redemption requests, replace the installed app, or activate remote workflows/releases until gates pass.
+- Publish the remote-manifest client and 15-minute watcher schedule definition.
+- Push main and manually dispatch watcher; require successful gates and public prerelease assets.
+- Fetch public assets through the production client and compare checksum/schema/attribution.
+- Observe at least one scheduled run or truthfully keep schedule health NOT TESTED.
+- Tag/release only after rebuild/self-test/live completeness/update-health/package checksum pass remotely.
+- Test the remote release in a disposable installation before installed replacement.
+- Never print or inspect real account state/logs during installed activation.
 
 ## Rollback
 
-All GUI, package, logs, and state use unique temporary directories. Rollback points are Git `d8b5218` and disposable pre-test file hashes.
+Rollback points are local commits `d8b5218`, `f3de8d5`, `77906e7`, and `f93d074`; release/update rollback uses the directly tested package transaction and production updater path.
 
 ## Result
 
-Completed locally. Disposable GUI/two-process and exact production updater success/rollback paths are TESTED. With explicit approval, one trusted terminal coupon was retried once through the real WebView/Hive contract and classified `invalid`; no identity was exposed. Remote activation remains gated. See [`P16-001-interactive-activation-readiness-result.md`](P16-001-interactive-activation-readiness-result.md).
+Pending. P16 completed result: [`P16-001-interactive-activation-readiness-result.md`](P16-001-interactive-activation-readiness-result.md).

@@ -2,9 +2,11 @@ name: Build Trusted Candidate Manifest
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "*/15 * * * *"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   watcher:
@@ -34,3 +36,18 @@ jobs:
             watcher-output/candidate-manifest.json.sha256
           if-no-files-found: error
           retention-days: 7
+      - name: Publish stable manifest assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "candidate-manifest"
+          $assets = @(
+            "watcher-output/candidate-manifest.json",
+            "watcher-output/candidate-manifest.json.sha256"
+          )
+          if (gh release view $tag 2>$null) {
+            gh release upload $tag @assets --clobber
+          } else {
+            gh release create $tag @assets --prerelease --title "Trusted Candidate Manifest" --notes "Machine-readable candidate manifest. No account data."
+          }
