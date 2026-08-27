@@ -3,7 +3,8 @@ name: Build Trusted Candidate Manifest
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/15 * * * *"
+    # Keep the 15-minute cadence off common quarter-hour load boundaries.
+    - cron: "13,28,43,58 * * * *"
 
 permissions:
   contents: write

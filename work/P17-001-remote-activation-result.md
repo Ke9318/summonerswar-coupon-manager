@@ -25,3 +25,5 @@
 - TESTED: public remote package normal update and injected-failure rollback in disposable installations.
 - TESTED: installed package replacement and synthetic GUI startup.
 - PENDING: first `schedule`-event cloud-watcher run; do not treat the schedule as healthy until a successful event is observed.
+
+The initial `*/15` definition produced no schedule event while the workflow and repository Actions policy were both active. Following GitHub's documented recommendation to avoid common high-load boundaries, the same 15-minute cadence was offset to minutes 13, 28, 43, and 58 pending direct observation.
