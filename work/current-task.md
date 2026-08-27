@@ -2,7 +2,7 @@
 
 - Tier: Critical
 - Disposition: APPROVE — user explicitly authorized remote push/workflow/schedule/release/installed activation
-- Status: Active
+- Status: Active — activation complete; awaiting first scheduled-event evidence
 
 ## Objective
 
@@ -28,4 +28,4 @@ Rollback points are local commits `d8b5218`, `f3de8d5`, `77906e7`, and `f93d074`
 
 ## Result
 
-Pending. P16 completed result: [`P16-001-interactive-activation-readiness-result.md`](P16-001-interactive-activation-readiness-result.md).
+Remote release and installed activation passed. The only open acceptance item is observing the first successful `schedule`-event cloud-watcher run. See [`P17-001-remote-activation-result.md`](P17-001-remote-activation-result.md).

@@ -1,6 +1,8 @@
 param(
   [Parameter(Mandatory=$true)][string]$PackageDirectory,
-  [Parameter(Mandatory=$true)][string]$PythonExe
+  [Parameter(Mandatory=$true)][string]$PythonExe,
+  [string]$ZipUrl,
+  [string]$ChecksumUrl
 )
 
 $ErrorActionPreference = 'Stop'
@@ -21,16 +23,23 @@ $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant
 Set-Content -LiteralPath ($zip + '.sha256') -Value $hash -Encoding ascii
 
 $port = 18765
-$server = Start-Process -FilePath $PythonExe -ArgumentList @(
-  '-m','http.server',$port,'--bind','127.0.0.1','--directory',$web
-) -WindowStyle Hidden -PassThru
+$server = $null
+if ([string]::IsNullOrWhiteSpace($ZipUrl) -or [string]::IsNullOrWhiteSpace($ChecksumUrl)) {
+  $server = Start-Process -FilePath $PythonExe -ArgumentList @(
+    '-m','http.server',$port,'--bind','127.0.0.1','--directory',$web
+  ) -WindowStyle Hidden -PassThru
+  $ZipUrl = "http://127.0.0.1:$port/SWCouponManager-win-x64.zip"
+  $ChecksumUrl = "http://127.0.0.1:$port/SWCouponManager-win-x64.zip.sha256"
+}
 
 try {
-  for ($i = 0; $i -lt 30; $i++) {
-    try {
-      $null = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$port/SWCouponManager-win-x64.zip.sha256"
-      break
-    } catch { Start-Sleep -Milliseconds 100 }
+  if ($server) {
+    for ($i = 0; $i -lt 30; $i++) {
+      try {
+        $null = Invoke-WebRequest -UseBasicParsing $ChecksumUrl
+        break
+      } catch { Start-Sleep -Milliseconds 100 }
+    }
   }
 
   $env:SWCM_UPDATE_TEST_RESTART_ARGS = "--gui-smoke-test --data-dir $(Join-Path $root 'success-state') --gui-smoke-hold-ms 5000"
@@ -38,8 +47,8 @@ try {
   Remove-Item Env:SWCM_UPDATE_TEST_INJECT_POST_COPY_FAILURE -ErrorAction SilentlyContinue
   $client = Start-Process -FilePath (Join-Path $success 'SWCouponManager.exe') -ArgumentList @(
     '--disposable-update-client','--expected-version','1.5.0',
-    '--zip-url',"http://127.0.0.1:$port/SWCouponManager-win-x64.zip",
-    '--checksum-url',"http://127.0.0.1:$port/SWCouponManager-win-x64.zip.sha256"
+    '--zip-url',$ZipUrl,
+    '--checksum-url',$ChecksumUrl
   ) -WindowStyle Hidden -Wait -PassThru
   for ($i = 0; $i -lt 200; $i++) {
     if ((Test-Path $env:SWCM_UPDATE_TEST_LOG_PATH) -and
@@ -60,8 +69,8 @@ try {
   $env:SWCM_UPDATE_TEST_INJECT_POST_COPY_FAILURE = '1'
   $client2 = Start-Process -FilePath (Join-Path $failure 'SWCouponManager.exe') -ArgumentList @(
     '--disposable-update-client','--expected-version','1.5.0',
-    '--zip-url',"http://127.0.0.1:$port/SWCouponManager-win-x64.zip",
-    '--checksum-url',"http://127.0.0.1:$port/SWCouponManager-win-x64.zip.sha256"
+    '--zip-url',$ZipUrl,
+    '--checksum-url',$ChecksumUrl
   ) -WindowStyle Hidden -Wait -PassThru
   for ($i = 0; $i -lt 200; $i++) {
     if ((Test-Path $env:SWCM_UPDATE_TEST_LOG_PATH) -and
