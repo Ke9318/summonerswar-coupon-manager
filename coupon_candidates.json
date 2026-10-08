@@ -1,14 +1,74 @@
 {
   "codes": [
-    { "code": "912XUXIECHUANQI", "source": "manual", "addedAt": "2026-08-17" },
-    { "code": "12YJUSTHALFWAY", "source": "manual", "addedAt": "2026-08-17" },
-    { "code": "ENTERTHESWCERA", "source": "manual", "addedAt": "2026-08-17" },
-    { "code": "WASWIRDSWC2026", "source": "manual", "addedAt": "2026-08-17" },
-    { "code": "SWC2026ROADTOWF", "source": "manual", "addedAt": "2026-08-17" },
-    { "code": "IGYEORA4WF2026", "source": "manual", "addedAt": "2026-08-17" },
-    { "code": "OQKR1STWFNUGU", "source": "manual", "addedAt": "2026-08-17" },
-    { "code": "4MINGYIDAOXIAN", "source": "manual", "addedAt": "2026-08-17" },
-    { "code": "YYDSSWC26ZAN", "source": "manual", "addedAt": "2026-08-17" },
-    { "code": "THEB3STMAGE", "source": "manual", "addedAt": "2026-08-27" }
+    {
+      "code": "912XUXIECHUANQI",
+      "source": "manual",
+      "addedAt": "2026-08-17"
+    },
+    {
+      "code": "12YJUSTHALFWAY",
+      "source": "manual",
+      "addedAt": "2026-08-17"
+    },
+    {
+      "code": "ENTERTHESWCERA",
+      "source": "manual",
+      "addedAt": "2026-08-17"
+    },
+    {
+      "code": "WASWIRDSWC2026",
+      "source": "manual",
+      "addedAt": "2026-08-17"
+    },
+    {
+      "code": "SWC2026ROADTOWF",
+      "source": "manual",
+      "addedAt": "2026-08-17"
+    },
+    {
+      "code": "IGYEORA4WF2026",
+      "source": "manual",
+      "addedAt": "2026-08-17"
+    },
+    {
+      "code": "OQKR1STWFNUGU",
+      "source": "manual",
+      "addedAt": "2026-08-17"
+    },
+    {
+      "code": "4MINGYIDAOXIAN",
+      "source": "manual",
+      "addedAt": "2026-08-17"
+    },
+    {
+      "code": "YYDSSWC26ZAN",
+      "source": "manual",
+      "addedAt": "2026-08-17"
+    },
+    {
+      "code": "THEB3STMAGE",
+      "source": "manual",
+      "addedAt": "2026-08-27"
+    },
+    {
+      "code": "NEWER4ISHERE",
+      "source": "manual-unverified",
+      "addedAt": "2026-10-09"
+    },
+    {
+      "code": "B3STNEWCOMER",
+      "source": "manual-unverified",
+      "addedAt": "2026-10-09"
+    },
+    {
+      "code": "555CHALLENGEISEZ",
+      "source": "manual-unverified",
+      "addedAt": "2026-10-09"
+    },
+    {
+      "code": "UGOTITSDVOL3",
+      "source": "manual-unverified",
+      "addedAt": "2026-10-09"
+    }
   ]
 }
